@@ -38,14 +38,14 @@ class Trainer:
         self.parameters_to_train = []
 
         self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
-        print("Using device:", self.device)
+        # print("Using device:", self.device)
 
         self.num_scales = len(self.opt.scales)
-        print("Training scales:", self.opt.scales)
+        # print("Training scales:", self.opt.scales)
         self.num_input_frames = len(self.opt.frame_ids)
-        print("Input frames:", self.opt.frame_ids)
+        # print("Input frames:", self.opt.frame_ids)
         self.num_pose_frames = 2 if self.opt.pose_model_input == "pairs" else self.num_input_frames
-        print("Pose frames:", self.num_pose_frames)
+        # print("Pose frames:", self.num_pose_frames)
 
         assert self.opt.frame_ids[0] == 0, "frame_ids must start with 0"
 
@@ -113,15 +113,15 @@ class Trainer:
         # data
         datasets_dict = {"nyu": datasets.NYUDataset}
         self.dataset = datasets_dict[self.opt.dataset]
-        print("Using dataset:", self.opt.dataset)
+        # print("Using dataset:", self.opt.dataset)
 
         fpath = os.path.join(os.path.dirname(__file__), "splits", self.opt.split, "{}_files.txt")
-        print("Using split file:", fpath)
+        # print("Using split file:", fpath)
 
         train_filenames = readlines(fpath.format("train"))
-        print("train_filenames:", len(train_filenames))
+        # print("train_filenames:", train_filenames[0:5])
         val_filenames = readlines(fpath.format("val"))
-        print("val_filenames:", len(val_filenames))
+        # print("val_filenames:", val_filenames[0:5])
         img_ext = '.jpg'
 
         num_train_samples = len(train_filenames)
@@ -162,7 +162,7 @@ class Trainer:
 
         self.backproject_depth = {}
         self.project_3d = {}
-        self.project_homo = {}
+        # self.project_homo = {}
         for scale in self.opt.scales:
             h = self.opt.height // (2 ** scale)
             w = self.opt.width // (2 ** scale)

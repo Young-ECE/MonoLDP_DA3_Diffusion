@@ -20,11 +20,11 @@ class MonodepthOptions:
         self.parser.add_argument("--data_path",
                                  type=str,
                                  help="path to the training data",
-                                 default=os.path.join(file_dir, "NYU_data", "my_data"))
+                                 default="/oldisk/home/jingyang/monoldp/datasets/nyu_data")
         self.parser.add_argument("--log_dir",
                                  type=str,
                                  help="log directory",
-                                 default=os.path.join(os.getcwd(), "tmp"))
+                                 default="/oldisk/home/jingyang/monoldp/temp")
 
         # TRAINING options
         self.parser.add_argument("--model_name",
@@ -77,7 +77,7 @@ class MonodepthOptions:
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=4)
+                                 default=6)
         self.parser.add_argument("--learning_rate",
                                  type=float,
                                  help="learning rate",
@@ -85,7 +85,7 @@ class MonodepthOptions:
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
-                                 default=30)
+                                 default=20)
         self.parser.add_argument("--scheduler_step_size",
                                  type=int,
                                  help="step size of the scheduler",

@@ -85,6 +85,7 @@ class NYUDataset(MonoDataset):
         else:
             image_path = os.path.join(
                 self.data_path, folder, str(frame_index) + ".jpg")
+            # print("DEBUG: image_path =", image_path)
         return image_path
 
     def get_depth(self, folder, frame_index, side, do_flip):
@@ -160,3 +161,7 @@ class NYUDataset(MonoDataset):
         norm_pix_coords = np.stack(((Us - self.K[0, 2]) / self.K[0, 0], (Vs - self.K[1, 2]) / self.K[1, 1]), axis=0)
 
         return norm_pix_coords
+    
+
+
+

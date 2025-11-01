@@ -1,0 +1,26 @@
+
+使用X11远程查看图片：
+
+ssh -Y jingyang@10.8.31.112
+echo $DISPLAY localhost:10.0
+xclock
+
+使用tensorboard查看训练记录：
+tensorboard --logdir ./runs/monoldp_depth
+
+使用screen创建训练会话：
+screen -S train
+执行训练命令
+ctrl+A  D
+screen -ls
+screen -r train
+exit
+ctrl+A  ESC进入screen的回滚模式
+
+
+查看当前目录内存：
+du -h --max-depth=1 一级目录
+df -h . 还剩余空间
+
+
+将数据集放在数据盘中，同时软连接
