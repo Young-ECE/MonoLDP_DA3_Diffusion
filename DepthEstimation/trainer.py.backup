@@ -103,17 +103,13 @@ class Trainer:
         self.models["pose_third"].to(self.device)
         self.parameters_to_train += list(self.models["pose_third"].parameters())
 
-        # if torch.cuda.device_count() > 1:
-        #     print("-> Using {} GPUs for training".format(torch.cuda.device_count()))
-        #     for key in self.models.keys():
-        #         # Only apply DataParallel to encoder and scalenet
-        #         # Pose models have complex dependencies, keep them on single GPU
-        #         if key in ["encoder", "scalenet"]:
-        #             self.models[key] = nn.DataParallel(self.models[key])
-        #     self.device = torch.device("cuda:0")
-        #     print("-> Note: encoder and scalenet use multi-GPU; pose and depth models use single GPU")
-        # else:
-        #     print("-> Using single GPU")
+        if torch.cuda.device_count() > 1:
+            print("-> Using {} GPUs for training".format(torch.cuda.device_count()))
+            for key in self.models.keys():
+                self.models[key] = nn.DataParallel(self.models[key])
+            self.device = torch.device("cuda:0")
+        else:
+            print("-> Using single GPU")
 
         self.model_optimizer = optim.Adam(self.parameters_to_train, self.opt.learning_rate)
         self.model_lr_scheduler = optim.lr_scheduler.StepLR(

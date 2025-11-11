@@ -58,7 +58,7 @@ class MonodepthOptions:
                                  nargs="+",
                                  type=int,
                                  help="scales used in the loss",
-                                 default=[0])
+                                 default=[0,1,2])
         self.parser.add_argument("--min_depth",
                                  type=float,
                                  help="minimum depth",
@@ -85,7 +85,7 @@ class MonodepthOptions:
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
-                                 default=20)
+                                 default=15)
         self.parser.add_argument("--scheduler_step_size",
                                  type=int,
                                  help="step size of the scheduler",

@@ -22,5 +22,3 @@ ctrl+A  ESC进入screen的回滚模式
 du -h --max-depth=1 一级目录
 df -h . 还剩余空间
 
-
-将数据集放在数据盘中，同时软连接
