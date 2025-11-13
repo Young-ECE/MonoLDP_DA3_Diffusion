@@ -13,6 +13,29 @@ import torch.nn as nn
 import torchvision.models as models
 import torch.utils.model_zoo as model_zoo
 
+try:
+    from torchvision.models import (
+        ResNet18_Weights,
+        ResNet34_Weights,
+        ResNet50_Weights,
+        ResNet101_Weights,
+        ResNet152_Weights,
+    )
+
+    _RESNET_WEIGHTS = {
+        18: ResNet18_Weights.IMAGENET1K_V1,
+        34: ResNet34_Weights.IMAGENET1K_V1,
+        50: ResNet50_Weights.IMAGENET1K_V1,
+        101: ResNet101_Weights.IMAGENET1K_V1,
+        152: ResNet152_Weights.IMAGENET1K_V1,
+    }
+except ImportError:  # fallback for older torchvision
+    _RESNET_WEIGHTS = {}
+
+
+def _get_resnet_weight(num_layers):
+    return _RESNET_WEIGHTS.get(num_layers, None)
+
 
 class ResNetMultiImageInput(models.ResNet):
     """Constructs a resnet model with varying number of input images.
@@ -52,7 +75,11 @@ def resnet_multiimage_input(num_layers, pretrained=False, num_input_images=1):
     model = ResNetMultiImageInput(block_type, blocks, num_input_images=num_input_images)
 
     if pretrained:
-        loaded = model_zoo.load_url(models.resnet.model_urls['resnet{}'.format(num_layers)])
+        weights_enum = _get_resnet_weight(num_layers)
+        if weights_enum is not None:
+            loaded = weights_enum.get_state_dict(progress=True)
+        else:
+            loaded = model_zoo.load_url(models.resnet.model_urls['resnet{}'.format(num_layers)])
         loaded['conv1.weight'] = torch.cat(
             [loaded['conv1.weight']] * num_input_images, 1) / num_input_images
         model.load_state_dict(loaded)
@@ -76,10 +103,19 @@ class ResnetEncoder(nn.Module):
         if num_layers not in resnets:
             raise ValueError("{} is not a valid number of resnet layers".format(num_layers))
 
+        weights_enum = _get_resnet_weight(num_layers) if pretrained else None
+
         if num_input_images > 1:
             self.encoder = resnet_multiimage_input(num_layers, pretrained, num_input_images)
         else:
-            self.encoder = resnets[num_layers](pretrained)
+            if weights_enum is not None:
+                self.encoder = resnets[num_layers](weights=weights_enum if pretrained else None)
+            else:
+                try:
+                    self.encoder = resnets[num_layers](pretrained=pretrained)
+                except TypeError:
+                    # torchvision >= 0.13 removes the 'pretrained' kwarg; fall back to weights=None
+                    self.encoder = resnets[num_layers](weights=None)
 
         if num_layers > 34:
             self.num_ch_enc[1:] *= 4

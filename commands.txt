@@ -21,4 +21,4 @@ ctrl+A  ESC进入screen的回滚模式
 查看当前目录内存：
 du -h --max-depth=1 一级目录
 df -h . 还剩余空间
-
+df -h 查看目录内容

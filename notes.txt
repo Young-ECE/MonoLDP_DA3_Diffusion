@@ -1,8 +1,10 @@
 /oldisk/home/jingyang/monoldp/
 ~/MonoLDP/DepthEstimation
+/oldisk/home/jingyang/monoldp/temp
+/oldisk/home/jingyang/monoldp/temp/mdp_20251106_205450/models/weights_14
 
-
-
+adam.pth   encoder.pth       pose.pth      pose_third.pth  result_nyu_split.txt
+depth.pth  pose_encoder.pth  pose_rec.pth  regression.pth  scalenet.pth
 模型评估：
 python evaluate_nyu_depth.py \
   --data_path /oldisk/home/jingyang/monoldp/datasets/nyu_data \
@@ -10,3 +12,17 @@ python evaluate_nyu_depth.py \
   --batch_size 6 \
   --num_workers 8 \
   --scales 0
+
+
+
+二阶段训练：
+python train.py \
+    --model_name diffusion_model \
+    --use_diffusion \
+    --teacher_weights_folder /oldisk/home/jingyang/monoldp/temp/mdp_20251106_205450/models/weights_14 \
+    --data_path /oldisk/home/jingyang/monoldp/datasets/nyu_data \
+    --num_epochs 10 \
+    --batch_size 6 \
+    --learning_rate 5e-5 \
+    --diffusion_l1_weight 1.0 \
+    --diffusion_ddim_weight 1.0

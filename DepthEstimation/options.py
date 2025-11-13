@@ -30,7 +30,7 @@ class MonodepthOptions:
         self.parser.add_argument("--model_name",
                                  type=str,
                                  help="the name of the folder to save the model in",
-                                 default="mdp")
+                                 default="monoldp_diffusion_model")
         self.parser.add_argument("--split",
                                  type=str,
                                  help="which training split to use",
@@ -58,7 +58,7 @@ class MonodepthOptions:
                                  nargs="+",
                                  type=int,
                                  help="scales used in the loss",
-                                 default=[0,1,2])
+                                 default=[0])
         self.parser.add_argument("--min_depth",
                                  type=float,
                                  help="minimum depth",
@@ -132,6 +132,34 @@ class MonodepthOptions:
                              default=1.0, 
                              help='Weight for depth consistency loss')
 
+        # DIFFUSION options
+        self.parser.add_argument("--use_diffusion",
+                                help="if set, use diffusion-based depth decoder",
+                                action="store_true",
+                                default=True)
+        self.parser.add_argument("--teacher_weights_folder",
+                                type=str,
+                                help="path to pretrained teacher model weights",
+                                default="/oldisk/home/jingyang/monoldp/temp/mdp_20251106_205450/models/weights_14")
+        self.parser.add_argument("--diffusion_steps",
+                                nargs="+",
+                                type=int,
+                                default=[5, 4, 3],
+                                help="number of diffusion inference steps for each scale")
+        self.parser.add_argument("--diffusion_timesteps",
+                                nargs="+",
+                                type=int,
+                                default=[250, 200, 150],
+                                help="number of training timesteps for each scale")
+        self.parser.add_argument("--diffusion_l1_weight",
+                                type=float,
+                                default=1.0,
+                                help="weight for L1 loss between teacher and student")
+        self.parser.add_argument("--diffusion_ddim_weight",
+                                type=float,
+                                default=1.0,
+                                help="weight for DDIM diffusion loss")
+
         # ABLATION options-PLNet
         self.parser.add_argument("--disable_pixel_coordinate_modulation",
                                  help="if set, do not use pixel coordinate modulation,"
@@ -176,6 +204,14 @@ class MonodepthOptions:
                                  type=int,
                                  help="number of epochs between each save",
                                  default=1)
+        self.parser.add_argument("--debug_no_save",
+                                 help="if set, skip writing tensorboard logs and model checkpoints (debug mode)",
+                                 action="store_true",
+                                 default=True)
+        self.parser.add_argument("--debug_save_teacher",
+                                 help="if set, save teacher disparity/depth debug visualizations",
+                                 action="store_true",
+                                 default=True)
 
         # EVALUATION options
         self.parser.add_argument("--disable_median_scaling",

@@ -22,6 +22,10 @@ import datasets
 import networks
 from IPython import embed
 
+import torch.nn.functional as F
+import os
+from PIL import Image
+
 
 class Trainer:
     def __init__(self, options):
@@ -32,6 +36,12 @@ class Trainer:
         self.log_path = os.path.join(self.opt.log_dir, f"{self.opt.model_name}_{timestamp}")
         print("-> Log path: {}".format(self.log_path))
         print("-> Model name: {}".format(self.opt.model_name))
+        self.debug_no_save = getattr(self.opt, "debug_no_save", False)
+        self.debug_save_teacher = getattr(self.opt, "debug_save_teacher", False)
+        if self.debug_no_save:
+            print("⚠ Debug mode enabled: training artifacts will not be written to disk.")
+        if self.debug_save_teacher:
+            print("→ Debug teacher snapshot saving enabled.")
 
         # checking height and width are multiples of 32
         assert self.opt.height % 32 == 0, "'height' must be a multiple of 32"
@@ -54,7 +64,6 @@ class Trainer:
 
         self.models["encoder"] = networks.ResnetEncoder(
         self.opt.num_layers, self.opt.weights_init == "pretrained")
-        print("encoder weights init:", self.opt.weights_init)
         self.models["encoder"].to(self.device)
         self.parameters_to_train += list(self.models["encoder"].parameters())
         
@@ -69,17 +78,81 @@ class Trainer:
                         networks.ProbabilisticScaleRegressionHead(in_channels=out_channels) for out_channels in res_out_channel])
         self.models["regression"].to(self.device)
         self.parameters_to_train += list(self.models["regression"].parameters())
-
-
-        self.models["depth"] = networks.DepthDecoder(self.models["encoder"].num_ch_enc, self.opt.scales,
-                                                     PixelCoorModu = not self.opt.disable_pixel_coordinate_modulation)
+        
+        # 深度解码器初始化
+        if self.opt.use_diffusion:
+            print("=" * 60)
+            print("🔄 使用扩散深度解码器")
+            print("=" * 60)
+            
+            # 1. 创建教师模型（冻结的预训练模型）
+            self.models["pre_depth_encoder"] = networks.ResnetEncoder(
+                self.opt.num_layers, self.opt.weights_init == "pretrained")
+            self.models["pre_depth_decoder"] = networks.DepthDecoder(
+                self.models["pre_depth_encoder"].num_ch_enc, 
+                self.opt.scales,
+                PixelCoorModu = not self.opt.disable_pixel_coordinate_modulation)
+            
+            # 2. 加载教师模型权重（如果提供）
+            if self.opt.teacher_weights_folder is not None:
+                teacher_path = self.opt.teacher_weights_folder
+                encoder_path = os.path.join(teacher_path, "encoder.pth")
+                decoder_path = os.path.join(teacher_path, "depth.pth")
+                
+                if os.path.exists(encoder_path) and os.path.exists(decoder_path):
+                    print(f"→ 加载教师模型: {teacher_path}")
+                    encoder_dict = torch.load(encoder_path)
+                    decoder_dict = torch.load(decoder_path)
+                    
+                    model_dict = self.models["pre_depth_encoder"].state_dict()
+                    depth_model_dict = self.models["pre_depth_decoder"].state_dict()
+                    
+                    self.models["pre_depth_encoder"].load_state_dict(
+                        {k: v for k, v in encoder_dict.items() if k in model_dict}
+                    )
+                    self.models["pre_depth_decoder"].load_state_dict(
+                        {k: v for k, v in decoder_dict.items() if k in depth_model_dict}
+                    )
+                    print("✓ 教师模型加载成功")
+                else:
+                    print(f"⚠ 警告: 教师权重未找到于 {teacher_path}")
+                    print("→ 教师模型将从头训练")
+            else:
+                print("⚠ 未指定教师模型路径，教师模型将使用与学生相同的初始化")
+            
+            # 3. 冻结教师模型
+            for param in self.models["pre_depth_encoder"].parameters():
+                param.requires_grad = False
+            for param in self.models["pre_depth_decoder"].parameters():
+                param.requires_grad = False
+            
+            self.models["pre_depth_encoder"].to(self.device)
+            self.models["pre_depth_decoder"].to(self.device)
+            self.models["pre_depth_encoder"].eval()
+            self.models["pre_depth_decoder"].eval()
+            
+            # 4. 创建学生模型（带扩散）
+            self.models["depth"] = networks.DepthDecoderDiffusion(
+                self.models["encoder"].num_ch_enc, 
+                self.opt.scales,
+                num_output_channels=3,
+                PixelCoorModu = not self.opt.disable_pixel_coordinate_modulation)
+            print("✓ 扩散解码器初始化成功")
+            print("=" * 60)
+        else:
+            # 不使用扩散，使用原始解码器
+            self.models["depth"] = networks.DepthDecoder(
+                self.models["encoder"].num_ch_enc, 
+                self.opt.scales,
+                PixelCoorModu = not self.opt.disable_pixel_coordinate_modulation)
+        
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
 
         self.models["pose_encoder"] = networks.ResnetEncoder(self.opt.num_layers,
                                                              self.opt.weights_init == "pretrained",
                                                              num_input_images=self.num_pose_frames)
-        print("pose_encoder weights init:", self.opt.weights_init)
+        # print("pose_encoder weights init:", self.opt.weights_init)
         self.models["pose_encoder"].to(self.device)
         self.parameters_to_train += list(self.models["pose_encoder"].parameters())
 
@@ -168,8 +241,9 @@ class Trainer:
         self.val_iter = iter(self.val_loader)
 
         self.writers = {}
-        for mode in ["train", "val"]:
-            self.writers[mode] = SummaryWriter(os.path.join(self.log_path, mode))
+        if not self.debug_no_save:
+            for mode in ["train", "val"]:
+                self.writers[mode] = SummaryWriter(os.path.join(self.log_path, mode))
 
         if not self.opt.no_ssim:
             self.ssim = SSIM()
@@ -195,7 +269,8 @@ class Trainer:
         print("There are {:d} training items and {:d} validation items\n".format(
             len(train_dataset), len(val_dataset)))
 
-        self.save_opts()
+        if not self.debug_no_save:
+            self.save_opts()
 
     def set_train(self):
         """Convert all models to training mode
@@ -219,7 +294,7 @@ class Trainer:
         for self.epoch in range(self.opt.num_epochs):
             torch.cuda.empty_cache()
             self.run_epoch()
-            if (self.epoch + 1) % self.opt.save_frequency == 0:
+            if (not self.debug_no_save) and ((self.epoch + 1) % self.opt.save_frequency == 0):
                 self.save_model()
 
     def run_epoch(self):
@@ -275,12 +350,34 @@ class Trainer:
 
         norm_pix_coords = [inputs[("norm_pix_coords", s)] for s in self.opt.scales]
 
-       
-         # Only feed the image with frame_id 0 through the depth encoder
-        features = self.models["encoder"](inputs[("color_aug", 0, 0)])
-        # ScaleNetwork to extract the depth factor
-
-        outputs = self.models["depth"](features, norm_pix_coords)
+        # 如果使用扩散模块
+        if self.opt.use_diffusion:
+            # 1. 使用教师模型生成伪GT（教师模型已冻结，使用eval模式）
+            with torch.no_grad():
+                pre_features = self.models["pre_depth_encoder"](inputs[("color_aug", 0, 0)])
+                pre_outputs = self.models["pre_depth_decoder"](pre_features, norm_pix_coords)
+                if self.debug_save_teacher:
+                    self._save_teacher_debug(pre_outputs)
+            
+            # 2. 学生模型前向传播
+            features = self.models["encoder"](inputs[("color_aug", 0, 0)])
+            
+            # 3. 准备扩散的伪GT（从教师模型的预测）
+            gt_for_diffusion = {}
+            for scale in self.opt.scales:
+                # 使用教师的 disp 作为扩散的目标
+                gt_for_diffusion[("disp_diffusion", scale)] = pre_outputs[("disp", scale)].detach()
+            
+            # 4. 使用扩散解码器
+            outputs = self.models["depth"](features, norm_pix_coords, gt_for_diffusion)
+            
+            # 5. 保存教师的预测，用于后续损失计算和可视化
+            for scale in self.opt.scales:
+                outputs[("predisp", scale)] = pre_outputs[("disp", scale)]
+        else:
+            # 不使用扩散，使用原始的深度解码器
+            features = self.models["encoder"](inputs[("color_aug", 0, 0)])
+            outputs = self.models["depth"](features, norm_pix_coords)
 
         outputs.update(self.predict_poses_ori(inputs))
         self.generate_images_pred_ori(inputs, outputs)
@@ -292,6 +389,29 @@ class Trainer:
         self.generate_images_pred_third(inputs, outputs)
 
         losses = self.compute_losses(inputs, outputs)
+        
+        # 如果使用扩散，添加额外的损失
+        if self.opt.use_diffusion:
+            # L1损失：学生与教师的一致性
+            l1_loss = 0
+            for scale in self.opt.scales:
+                l1_loss += F.l1_loss(outputs[("predisp", scale)], outputs[("disp", scale)])
+            losses['l1'] = l1_loss / len(self.opt.scales)
+            
+            # DDIM损失：扩散模型的去噪损失
+            ddim_loss = 0
+            for scale in self.opt.scales:
+                if ("ddim_loss", scale) in outputs:
+                    ddim_loss += outputs[("ddim_loss", scale)]
+            losses['ddim'] = ddim_loss / len(self.opt.scales) if ddim_loss != 0 else torch.tensor(0.0).to(self.device)
+            
+            # 保存原始光度损失
+            losses['photometric'] = losses["loss"].clone()
+            
+            # 总损失 = 光度损失 + L1损失 + DDIM损失
+            losses["loss"] = (1.0 * losses['photometric'] + 
+                             self.opt.diffusion_l1_weight * losses['l1'] + 
+                             self.opt.diffusion_ddim_weight * losses['ddim'])
 
         return outputs, losses
 
@@ -979,6 +1099,8 @@ class Trainer:
     def log(self, mode, inputs, outputs, losses):
         """Write an event to the tensorboard events file
         """
+        if self.debug_no_save or mode not in self.writers:
+            return
         writer = self.writers[mode]
         for l, v in losses.items():
             writer.add_scalar("{}".format(l), v, self.step)
@@ -1006,9 +1128,43 @@ class Trainer:
                     "disp_{}/{}".format(s, j),
                     normalize_image(outputs[("disp", s)][j]), self.step)
 
+    def _save_teacher_debug(self, pre_outputs):
+        """Save teacher disparity visualizations for debugging purposes."""
+        if not hasattr(self, "_teacher_debug_dir"):
+            self._teacher_debug_dir = os.path.join(self.log_path, "debug_teacher_disp")
+            os.makedirs(self._teacher_debug_dir, exist_ok=True)
+
+        step = getattr(self, "step", 0)
+        with torch.no_grad():
+            for scale in self.opt.scales:
+                key = ("disp", scale)
+                if key not in pre_outputs:
+                    continue
+                disp = pre_outputs[key]
+                if disp is None:
+                    continue
+                disp = disp.detach().cpu()
+                if disp.ndim != 4:
+                    continue
+                disp_vis = normalize_image(disp)
+                batch_to_save = min(2, disp_vis.shape[0])
+                for idx in range(batch_to_save):
+                    tensor = disp_vis[idx]
+                    if tensor.shape[0] > 1:
+                        tensor = tensor.mean(0, keepdim=True)
+                    array = tensor.squeeze(0).numpy()
+                    array = np.clip(array * 255.0, 0, 255).astype(np.uint8)
+                    save_path = os.path.join(
+                        self._teacher_debug_dir,
+                        f"step{step:06d}_batch{idx}_scale{scale}.png"
+                    )
+                    Image.fromarray(array).save(save_path)
+
     def save_opts(self):
         """Save options to disk so we know what we ran this experiment with
         """
+        if self.debug_no_save:
+            return
         models_dir = os.path.join(self.log_path, "models")
         if not os.path.exists(models_dir):
             os.makedirs(models_dir)
@@ -1020,6 +1176,8 @@ class Trainer:
     def save_model(self):
         """Save model weights to disk
         """
+        if self.debug_no_save:
+            return
         save_folder = os.path.join(self.log_path, "models", "weights_{}".format(self.epoch))
         if not os.path.exists(save_folder):
             os.makedirs(save_folder)
