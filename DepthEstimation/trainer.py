@@ -132,11 +132,13 @@ class Trainer:
             self.models["pre_depth_decoder"].eval()
             
             # 4. 创建学生模型（带扩散）
+            # Note: Diffusion decoder outputs single-channel disparity (num_output_channels=1)
+            # and does not use PixelCoorModu (follows MonoDiffusion architecture)
             self.models["depth"] = networks.DepthDecoderDiffusion(
                 self.models["encoder"].num_ch_enc, 
                 self.opt.scales,
-                num_output_channels=3,
-                PixelCoorModu = not self.opt.disable_pixel_coordinate_modulation)
+                num_output_channels=1,
+                use_skips=True)
             print("✓ 扩散解码器初始化成功")
             print("=" * 60)
         else:
@@ -369,7 +371,8 @@ class Trainer:
                 gt_for_diffusion[("disp_diffusion", scale)] = pre_outputs[("disp", scale)].detach()
             
             # 4. 使用扩散解码器
-            outputs = self.models["depth"](features, norm_pix_coords, gt_for_diffusion)
+            # Note: Diffusion decoder does not use norm_pix_coords (follows MonoDiffusion)
+            outputs = self.models["depth"](features, gt_for_diffusion)
             
             # 5. 保存教师的预测，用于后续损失计算和可视化
             for scale in self.opt.scales:
@@ -996,13 +999,17 @@ class Trainer:
                 loss += outputs[("reprojection_losses_new", frame_id, scale)].mean()
 
 
-            if self.opt.disable_plane_smoothness:
+            # Smoothness loss: use coeff if available (DepthDecoder), else use disp (DiffusionDecoder)
+            if self.opt.disable_plane_smoothness or ("coeff", scale) not in outputs:
+                # For diffusion decoder or when plane smoothness is disabled,
+                # compute smoothness on normalized disparity
                 mean_disp = disp.mean(2, True).mean(3, True)
                 norm_disp = disp / (mean_disp + 1e-7)
                 smooth_loss = get_smooth_loss(norm_disp, color)
             else:
+                # For original decoder with pixel coordinate modulation,
+                # compute smoothness on normalized coefficients
                 mean_coeff = outputs[("coeff", scale)].abs().mean(2, True).mean(3, True)
-
                 norm_coeff = outputs[("coeff", scale)] / (mean_coeff + 1e-7)
                 smooth_loss = get_smooth_loss(norm_coeff, color)
 

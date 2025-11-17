@@ -26,21 +26,30 @@ class ConvBlock(nn.Module):
 
 
 class DepthDecoderDiffusion(nn.Module):
-    """Depth decoder with diffusion-based refinement"""
-    def __init__(self, num_ch_enc, scales=range(4), num_output_channels=3, 
-                 use_skips=True, PixelCoorModu=True):
+    """Depth decoder with diffusion-based refinement
+    
+    This follows MonoDiffusion's architecture:
+    - Always decodes through scale 2 -> 1 -> 0
+    - num_output_channels=1 (single-channel disparity/depth)
+    - Does not use pixel coordinate modulation
+    """
+    def __init__(self, num_ch_enc, scales=range(3), num_output_channels=1, 
+                 use_skips=True):
         super().__init__()
 
         self.num_output_channels = num_output_channels
         self.use_skips = use_skips
         self.upsample_mode = 'bilinear'
         self.scales = sorted(list(scales))
-        self.PixelCoorModu = PixelCoorModu
 
         self.num_ch_enc = np.array(num_ch_enc)
         self.num_ch_dec = (self.num_ch_enc / 2).astype('int')
 
         # Decoder
+        # Note: For ResnetEncoder with 5 features, we use skip connections:
+        # - decoder i=2 uses encoder[3] (256 ch)
+        # - decoder i=1 uses encoder[2] (128 ch)
+        # - decoder i=0 has no skip
         self.convs = OrderedDict()
         for i in range(2, -1, -1):
             # upconv_0
@@ -51,7 +60,10 @@ class DepthDecoderDiffusion(nn.Module):
             # upconv_1
             num_ch_in = self.num_ch_dec[i]
             if self.use_skips and i > 0:
-                num_ch_in += self.num_ch_enc[i - 1]
+                # decoder i uses encoder skip from index i+1
+                skip_idx = i + 1
+                if skip_idx < len(self.num_ch_enc):
+                    num_ch_in += self.num_ch_enc[skip_idx]
             num_ch_out = self.num_ch_dec[i]
             self.convs[("upconv", i, 1)] = ConvBlock(num_ch_in, num_ch_out)
 
@@ -108,13 +120,15 @@ class DepthDecoderDiffusion(nn.Module):
         default_steps = {0: 3, 1: 4, 2: 5}
         return default_steps.get(scale, max(3, 5 - index))
 
-    def forward(self, input_features, norm_pix_coords, gt=None, mask=None):
+    def forward(self, input_features, gt=None, mask=None):
         """
         Args:
-            input_features: encoder features
-            norm_pix_coords: normalized pixel coordinates for depth decoding
-            gt: ground truth disparity for diffusion (from teacher model)
+            input_features: encoder features (list of 5 tensors from ResNet)
+            gt: ground truth disparity for diffusion (from teacher model), dict with keys ("disp_diffusion", scale)
             mask: optional mask for masked training
+        
+        Note: This follows MonoDiffusion's architecture where decoder always processes
+        scale 2 -> 1 -> 0 in sequence, regardless of which scales are in self.scales.
         """
         self.outputs = {}
 
@@ -132,34 +146,50 @@ class DepthDecoderDiffusion(nn.Module):
                     input_features[i] = input_features[i] * mask_resized
                     self.outputs[("mask", i)] = mask_resized
     
-        # Decoder forward pass
-        if len(input_features) >= len(self.scales) + 1:
-            encoder_features = input_features[-(len(self.scales) + 1):]
-        else:
-            encoder_features = input_features
-
-        x = encoder_features[-1]
-        skip_features = encoder_features[:-1][::-1]
-        skip_idx = 0
-        sorted_scales = sorted(self.scales, reverse=True)
+        # Decoder forward pass - ALWAYS decode from scale 2 to 0
+        # This matches MonoDiffusion's implementation
+        # 
+        # Note: MonoDiffusion uses LiteMono encoder with 3 feature layers.
+        # We use ResnetEncoder with 5 feature layers.
+        # We need to select the last 3 features for skip connections:
+        # - features[2] (128 ch, H/8, W/8)  for decoder scale 1
+        # - features[3] (256 ch, H/16, W/16) for decoder scale 2
+        # - features[4] (512 ch, H/32, W/32) is the starting point
+        
+        x = input_features[-1]  # Start from deepest feature (512 channels, H/32, W/32)
         conditions = {}
         
-        for scale in sorted_scales:
-            x = self.convs[("upconv", scale, 0)](x)
+        # Process decoder layers in order: 2 -> 1 -> 0
+        for i in range(2, -1, -1):
+            x = self.convs[("upconv", i, 0)](x)
             x = [upsample(x)]
 
-            if self.use_skips and scale != sorted_scales[-1] and skip_idx < len(skip_features):
-                skip = skip_features[skip_idx]
-                if skip.shape[-2:] != x[0].shape[-2:]:
-                    skip = F.interpolate(skip, size=x[0].shape[-2:], mode="nearest")
-                x += [skip]
-                skip_idx += 1
+            # Add skip connections from appropriate encoder features
+            # decoder i=2 -> encoder features[2] (128 ch, H/8, W/8) after upsampling to H/16, W/16
+            # decoder i=1 -> encoder features[1] (64 ch, H/4, W/4) after upsampling to H/8, W/8  
+            # decoder i=0 -> no skip
+            if self.use_skips and i > 0:
+                # Map decoder scale to encoder feature index
+                # After upsampling x is at resolution H/(2^(4-i)), W/(2^(4-i))
+                # We need encoder feature at the same resolution
+                skip_idx = i + 1  # decoder i=2 uses encoder[3], i=1 uses encoder[2]
+                if skip_idx < len(input_features):
+                    skip = input_features[skip_idx]
+                    # Ensure spatial dimensions match after upsampling
+                    if skip.shape[-2:] != x[0].shape[-2:]:
+                        skip = F.interpolate(skip, size=x[0].shape[-2:], mode="nearest")
+                    x += [skip]
+            
             x = torch.cat(x, 1)
-            x = self.convs[("upconv", scale, 1)](x)
+            x = self.convs[("upconv", i, 1)](x)
 
-            if scale in self.scales:
-                f = self.convs[("conconv", scale)](x)
-                conditions[str(scale)] = f
+            # Store condition features for scales we care about
+            # Note: Upsample condition features to match target resolution like MonoDiffusion
+            if i in self.scales:
+                f = self.convs[("conconv", i)](x)
+                # Upsample condition feature to target resolution
+                f_upsampled = F.interpolate(f, scale_factor=2, mode='bilinear', align_corners=False)
+                conditions[str(i)] = f_upsampled
         
         # If no GT provided (inference mode), generate initial prediction
         if gt is None:
@@ -169,16 +199,25 @@ class DepthDecoderDiffusion(nn.Module):
             )
         
         # Diffusion refinement (training mode with GT)
+        # Process scales from coarsest to finest (2 -> 1 -> 0)
         refined_depths = {}
         condition_inputs = {}
         diffusion_traces = {}
         base_noise = None
+        
+        # Process only the scales that are in self.scales, in reverse order
+        sorted_scales = sorted(self.scales, reverse=True)
 
         for idx, scale in enumerate(sorted_scales):
             scale_key = str(scale)
             condition = conditions[scale_key]
+            
+            # Ensure condition feature matches GT spatial resolution
+            target_shape = gt[("disp_diffusion", scale)].shape[-3:]
+            condition = self._resize_to(condition, target_shape[-2:])
             cond_input = condition
 
+            # Add previous scale's refined depth as additional conditioning
             if idx > 0:
                 prev_scale = sorted_scales[idx - 1]
                 prev_key = str(prev_scale)
@@ -193,9 +232,9 @@ class DepthDecoderDiffusion(nn.Module):
 
             pipeline = self.diffusion_pipelines[scale_key]
             num_steps = self.diffusion_inference_steps[scale_key]
-            target_shape = gt[("disp_diffusion", scale)].shape[-3:]
 
             if idx == 0:
+                # First scale: generate new noise
                 refined_depth, pred_seq, base_noise = pipeline(
                     batch_size=x.shape[0],
                     device=x.device,
@@ -205,6 +244,7 @@ class DepthDecoderDiffusion(nn.Module):
                     num_inference_steps=num_steps
                 )
             else:
+                # Subsequent scales: reuse upsampled noise
                 upsampled_noise = self._resize_to(base_noise, target_shape[-2:])
                 refined_depth, pred_seq, _ = pipeline(
                     batch_size=x.shape[0],

@@ -250,8 +250,12 @@ class MonoDataset(data.Dataset):
             inputs[("norm_pix_coords", scale)] = torch.from_numpy(norm_pix_coords)
 
         if do_color_aug:
-            color_aug = transforms.ColorJitter.get_params(
-                self.brightness, self.contrast, self.saturation, self.hue)
+            # Create a ColorJitter transform with the specified parameters
+            color_aug = transforms.ColorJitter(
+                brightness=self.brightness, 
+                contrast=self.contrast, 
+                saturation=self.saturation, 
+                hue=self.hue)
         else:
             color_aug = (lambda x: x)
 

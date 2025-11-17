@@ -57,8 +57,8 @@ class MonodepthOptions:
         self.parser.add_argument("--scales",
                                  nargs="+",
                                  type=int,
-                                 help="scales used in the loss",
-                                 default=[0])
+                                 help="scales used in the loss (for diffusion decoder, use [0, 1, 2])",
+                                 default=[0, 1, 2])
         self.parser.add_argument("--min_depth",
                                  type=float,
                                  help="minimum depth",
@@ -77,7 +77,7 @@ class MonodepthOptions:
         self.parser.add_argument("--batch_size",
                                  type=int,
                                  help="batch size",
-                                 default=6)
+                                 default=2)
         self.parser.add_argument("--learning_rate",
                                  type=float,
                                  help="learning rate",
@@ -207,7 +207,7 @@ class MonodepthOptions:
         self.parser.add_argument("--debug_no_save",
                                  help="if set, skip writing tensorboard logs and model checkpoints (debug mode)",
                                  action="store_true",
-                                 default=True)
+                                 default=False)
         self.parser.add_argument("--debug_save_teacher",
                                  help="if set, save teacher disparity/depth debug visualizations",
                                  action="store_true",
