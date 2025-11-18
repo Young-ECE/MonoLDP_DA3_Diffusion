@@ -159,6 +159,41 @@ class MonodepthOptions:
                                 type=float,
                                 default=1.0,
                                 help="weight for DDIM diffusion loss")
+        
+        # DEPTH ANYTHING teacher options
+        self.parser.add_argument("--use_depth_anything",
+                                help="if set, use Depth Anything as teacher model instead of pretrained encoder-decoder",
+                                action="store_true",
+                                default=False)
+        self.parser.add_argument("--depth_anything_model_type",
+                                type=str,
+                                help="Depth Anything model size",
+                                default="vits",
+                                choices=["vits", "vitb", "vitl"])
+        self.parser.add_argument("--depth_anything_version",
+                                type=str,
+                                help="Depth Anything version",
+                                default="v2",
+                                choices=["v1", "v2"])
+        self.parser.add_argument("--depth_anything_weights",
+                                type=str,
+                                help="path to Depth Anything pretrained weights (optional, will auto-download if not provided)",
+                                default=None)
+        
+        # DEPTH ANYTHING V3 teacher options
+        self.parser.add_argument("--use_depth_anything_v3",
+                                help="if set, use Depth Anything V3 as teacher model (overrides --use_depth_anything)",
+                                action="store_true",
+                                default=False)
+        self.parser.add_argument("--depth_anything_v3_model",
+                                type=str,
+                                help="Depth Anything V3 model name",
+                                default="DA3Mono-Large",
+                                choices=["DA3Mono-Large"])
+        self.parser.add_argument("--depth_anything_v3_weights",
+                                type=str,
+                                help="path to Depth Anything V3 model directory (optional, will auto-download from HuggingFace if not provided)",
+                                default=None)
 
         # ABLATION options-PLNet
         self.parser.add_argument("--disable_pixel_coordinate_modulation",

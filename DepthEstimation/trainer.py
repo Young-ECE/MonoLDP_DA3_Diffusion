@@ -85,51 +85,118 @@ class Trainer:
             print("🔄 使用扩散深度解码器")
             print("=" * 60)
             
-            # 1. 创建教师模型（冻结的预训练模型）
-            self.models["pre_depth_encoder"] = networks.ResnetEncoder(
-                self.opt.num_layers, self.opt.weights_init == "pretrained")
-            self.models["pre_depth_decoder"] = networks.DepthDecoder(
-                self.models["pre_depth_encoder"].num_ch_enc, 
-                self.opt.scales,
-                PixelCoorModu = not self.opt.disable_pixel_coordinate_modulation)
-            
-            # 2. 加载教师模型权重（如果提供）
-            if self.opt.teacher_weights_folder is not None:
-                teacher_path = self.opt.teacher_weights_folder
-                encoder_path = os.path.join(teacher_path, "encoder.pth")
-                decoder_path = os.path.join(teacher_path, "depth.pth")
+            # 判断使用哪种教师模型（三选一：DA3 / DA2-DA1 / 传统）
+            if self.opt.use_depth_anything_v3:
+                print("📦 使用 Depth Anything V3 作为教师模型")
+                print(f"   - 模型: {self.opt.depth_anything_v3_model}")
+                print(f"   - 教师模型：仅加载 depth_anything_v3_teacher")
                 
-                if os.path.exists(encoder_path) and os.path.exists(decoder_path):
-                    print(f"→ 加载教师模型: {teacher_path}")
-                    encoder_dict = torch.load(encoder_path)
-                    decoder_dict = torch.load(decoder_path)
-                    
-                    model_dict = self.models["pre_depth_encoder"].state_dict()
-                    depth_model_dict = self.models["pre_depth_decoder"].state_dict()
-                    
-                    self.models["pre_depth_encoder"].load_state_dict(
-                        {k: v for k, v in encoder_dict.items() if k in model_dict}
-                    )
-                    self.models["pre_depth_decoder"].load_state_dict(
-                        {k: v for k, v in decoder_dict.items() if k in depth_model_dict}
-                    )
-                    print("✓ 教师模型加载成功")
-                else:
-                    print(f"⚠ 警告: 教师权重未找到于 {teacher_path}")
-                    print("→ 教师模型将从头训练")
+                # 创建 Depth Anything V3 教师模型（仅此一个教师模型）
+                self.models["depth_anything_v3_teacher"] = networks.create_depth_anything_v3_teacher(
+                    model_name=self.opt.depth_anything_v3_model,
+                    device=self.device,
+                    scales=self.opt.scales,
+                    input_size=(self.opt.height, self.opt.width),
+                    model_path=self.opt.depth_anything_v3_weights
+                )
+                self.models["depth_anything_v3_teacher"].eval()
+                
+                # 标记使用 Depth Anything V3（互斥标记）
+                self.use_depth_anything_v3_teacher = True
+                self.use_depth_anything_teacher = False
+                self.use_traditional_teacher = False
+                
+                print("✓ Depth Anything V3 教师模型加载成功")
+                print("   注意：不会创建 pre_depth_encoder/pre_depth_decoder")
+                print("   注意：不会创建 depth_anything_teacher (V1/V2)")
+                print("=" * 60)
+                
+            elif self.opt.use_depth_anything:
+                print("📦 使用 Depth Anything V2/V1 作为教师模型")
+                print(f"   - 模型类型: {self.opt.depth_anything_model_type}")
+                print(f"   - 版本: {self.opt.depth_anything_version}")
+                print(f"   - 教师模型：仅加载 depth_anything_teacher")
+                
+                # 创建 Depth Anything 教师模型（仅此一个教师模型）
+                self.models["depth_anything_teacher"] = networks.create_depth_anything_teacher(
+                    model_type=self.opt.depth_anything_model_type,
+                    version=self.opt.depth_anything_version,
+                    device=self.device,
+                    scales=self.opt.scales,
+                    input_size=(self.opt.height, self.opt.width),
+                    model_path=self.opt.depth_anything_weights
+                )
+                self.models["depth_anything_teacher"].eval()
+                
+                # 标记使用 Depth Anything（互斥标记）
+                self.use_depth_anything_teacher = True
+                self.use_depth_anything_v3_teacher = False
+                self.use_traditional_teacher = False
+                
+                print("✓ Depth Anything V1/V2 教师模型加载成功")
+                print("   注意：不会创建 pre_depth_encoder/pre_depth_decoder")
+                print("   注意：不会创建 depth_anything_v3_teacher")
+                print("=" * 60)
+                
             else:
-                print("⚠ 未指定教师模型路径，教师模型将使用与学生相同的初始化")
-            
-            # 3. 冻结教师模型
-            for param in self.models["pre_depth_encoder"].parameters():
-                param.requires_grad = False
-            for param in self.models["pre_depth_decoder"].parameters():
-                param.requires_grad = False
-            
-            self.models["pre_depth_encoder"].to(self.device)
-            self.models["pre_depth_decoder"].to(self.device)
-            self.models["pre_depth_encoder"].eval()
-            self.models["pre_depth_decoder"].eval()
+                print("📦 使用传统 encoder-decoder 作为教师模型")
+                print(f"   - 教师模型：加载 pre_depth_encoder + pre_depth_decoder")
+                
+                # 1. 创建教师模型（冻结的预训练模型）
+                self.models["pre_depth_encoder"] = networks.ResnetEncoder(
+                    self.opt.num_layers, self.opt.weights_init == "pretrained")
+                self.models["pre_depth_decoder"] = networks.DepthDecoder(
+                    self.models["pre_depth_encoder"].num_ch_enc, 
+                    self.opt.scales,
+                    PixelCoorModu = not self.opt.disable_pixel_coordinate_modulation)
+                
+                # 2. 加载教师模型权重（如果提供）
+                if self.opt.teacher_weights_folder is not None:
+                    teacher_path = self.opt.teacher_weights_folder
+                    encoder_path = os.path.join(teacher_path, "encoder.pth")
+                    decoder_path = os.path.join(teacher_path, "depth.pth")
+                    
+                    if os.path.exists(encoder_path) and os.path.exists(decoder_path):
+                        print(f"→ 加载教师模型: {teacher_path}")
+                        encoder_dict = torch.load(encoder_path)
+                        decoder_dict = torch.load(decoder_path)
+                        
+                        model_dict = self.models["pre_depth_encoder"].state_dict()
+                        depth_model_dict = self.models["pre_depth_decoder"].state_dict()
+                        
+                        self.models["pre_depth_encoder"].load_state_dict(
+                            {k: v for k, v in encoder_dict.items() if k in model_dict}
+                        )
+                        self.models["pre_depth_decoder"].load_state_dict(
+                            {k: v for k, v in decoder_dict.items() if k in depth_model_dict}
+                        )
+                        print("✓ 教师模型加载成功")
+                    else:
+                        print(f"⚠ 警告: 教师权重未找到于 {teacher_path}")
+                        print("→ 教师模型将从头训练")
+                else:
+                    print("⚠ 未指定教师模型路径，教师模型将使用与学生相同的初始化")
+                
+                # 3. 冻结教师模型
+                for param in self.models["pre_depth_encoder"].parameters():
+                    param.requires_grad = False
+                for param in self.models["pre_depth_decoder"].parameters():
+                    param.requires_grad = False
+                
+                self.models["pre_depth_encoder"].to(self.device)
+                self.models["pre_depth_decoder"].to(self.device)
+                self.models["pre_depth_encoder"].eval()
+                self.models["pre_depth_decoder"].eval()
+                
+                # 标记使用传统教师（互斥标记）
+                self.use_depth_anything_teacher = False
+                self.use_depth_anything_v3_teacher = False
+                self.use_traditional_teacher = True
+                
+                print("✓ 传统 encoder-decoder 教师模型加载成功")
+                print("   注意：不会创建 depth_anything_teacher (V1/V2)")
+                print("   注意：不会创建 depth_anything_v3_teacher")
+                print("=" * 60)
             
             # 4. 创建学生模型（带扩散）
             # Note: Diffusion decoder outputs single-channel disparity (num_output_channels=1)
@@ -142,11 +209,18 @@ class Trainer:
             print("✓ 扩散解码器初始化成功")
             print("=" * 60)
         else:
-            # 不使用扩散，使用原始解码器
+            # 不使用扩散，使用原始解码器（不需要教师模型）
             self.models["depth"] = networks.DepthDecoder(
                 self.models["encoder"].num_ch_enc, 
                 self.opt.scales,
                 PixelCoorModu = not self.opt.disable_pixel_coordinate_modulation)
+            
+            # 标记不使用任何教师模型（因为不使用扩散）
+            self.use_depth_anything_teacher = False
+            self.use_depth_anything_v3_teacher = False
+            self.use_traditional_teacher = False
+            
+            print("→ 不使用扩散，无需教师模型")
         
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
@@ -356,8 +430,20 @@ class Trainer:
         if self.opt.use_diffusion:
             # 1. 使用教师模型生成伪GT（教师模型已冻结，使用eval模式）
             with torch.no_grad():
-                pre_features = self.models["pre_depth_encoder"](inputs[("color_aug", 0, 0)])
-                pre_outputs = self.models["pre_depth_decoder"](pre_features, norm_pix_coords)
+                if self.use_depth_anything_v3_teacher:
+                    # 使用 Depth Anything V3 作为教师
+                    # 注意：Depth Anything V3 需要 RGB 图像输入 (0-1 范围)
+                    pre_outputs = self.models["depth_anything_v3_teacher"](inputs[("color_aug", 0, 0)])
+                elif self.use_depth_anything_teacher:
+                    # 使用 Depth Anything V2/V1 作为教师
+                    # 注意：Depth Anything 需要 RGB 图像输入 (0-1 范围)
+                    # inputs[("color_aug", 0, 0)] 已经在 0-1 范围内
+                    pre_outputs = self.models["depth_anything_teacher"](inputs[("color_aug", 0, 0)])
+                else:
+                    # 使用传统 encoder-decoder 作为教师
+                    pre_features = self.models["pre_depth_encoder"](inputs[("color_aug", 0, 0)])
+                    pre_outputs = self.models["pre_depth_decoder"](pre_features, norm_pix_coords)
+                
                 if self.debug_save_teacher:
                     self._save_teacher_debug(pre_outputs)
             
@@ -1136,10 +1222,16 @@ class Trainer:
                     normalize_image(outputs[("disp", s)][j]), self.step)
 
     def _save_teacher_debug(self, pre_outputs):
-        """Save teacher disparity visualizations for debugging purposes."""
+        """Save teacher disparity and depth visualizations for debugging purposes."""
         if not hasattr(self, "_teacher_debug_dir"):
-            self._teacher_debug_dir = os.path.join(self.log_path, "debug_teacher_disp")
+            self._teacher_debug_dir = os.path.join(self.log_path, "teacher_outputs")
             os.makedirs(self._teacher_debug_dir, exist_ok=True)
+            # 创建子目录
+            self._teacher_disp_dir = os.path.join(self._teacher_debug_dir, "disparity")
+            self._teacher_depth_dir = os.path.join(self._teacher_debug_dir, "depth")
+            os.makedirs(self._teacher_disp_dir, exist_ok=True)
+            os.makedirs(self._teacher_depth_dir, exist_ok=True)
+            print(f"→ 教师模型输出将保存到: {self._teacher_debug_dir}")
 
         step = getattr(self, "step", 0)
         with torch.no_grad():
@@ -1153,19 +1245,63 @@ class Trainer:
                 disp = disp.detach().cpu()
                 if disp.ndim != 4:
                     continue
-                disp_vis = normalize_image(disp)
-                batch_to_save = min(2, disp_vis.shape[0])
+                
+                batch_to_save = min(2, disp.shape[0])
                 for idx in range(batch_to_save):
-                    tensor = disp_vis[idx]
-                    if tensor.shape[0] > 1:
-                        tensor = tensor.mean(0, keepdim=True)
-                    array = tensor.squeeze(0).numpy()
-                    array = np.clip(array * 255.0, 0, 255).astype(np.uint8)
-                    save_path = os.path.join(
-                        self._teacher_debug_dir,
-                        f"step{step:06d}_batch{idx}_scale{scale}.png"
+                    # 1. 保存视差图（disparity）
+                    disp_single = disp[idx:idx+1]  # (1, 1, H, W)
+                    if disp_single.shape[1] > 1:
+                        disp_single = disp_single.mean(1, keepdim=True)
+                    
+                    disp_vis = normalize_image(disp_single)
+                    disp_array = disp_vis.squeeze(0).squeeze(0).numpy()
+                    disp_array = np.clip(disp_array * 255.0, 0, 255).astype(np.uint8)
+                    disp_save_path = os.path.join(
+                        self._teacher_disp_dir,
+                        f"step{step:06d}_batch{idx}_scale{scale}_disp.png"
                     )
-                    Image.fromarray(array).save(save_path)
+                    Image.fromarray(disp_array, mode='L').save(disp_save_path)
+                    
+                    # 2. 保存深度图（depth）- 转换为深度并可视化
+                    # 将视差转换为深度（使用简单的转换，因为这是相对深度）
+                    disp_np = disp_single.squeeze().numpy()
+                    # 避免除零
+                    depth_np = 1.0 / (disp_np + 1e-6)
+                    # 归一化深度用于可视化
+                    depth_min, depth_max = depth_np.min(), depth_np.max()
+                    if depth_max > depth_min:
+                        depth_normalized = (depth_np - depth_min) / (depth_max - depth_min)
+                    else:
+                        depth_normalized = depth_np
+                    
+                    # 使用彩色映射（jet colormap）使深度更易观察
+                    import matplotlib.pyplot as plt
+                    import matplotlib.cm as cm
+                    depth_colored = cm.jet(depth_normalized)[:, :, :3]  # (H, W, 3)
+                    depth_colored = (depth_colored * 255).astype(np.uint8)
+                    depth_save_path = os.path.join(
+                        self._teacher_depth_dir,
+                        f"step{step:06d}_batch{idx}_scale{scale}_depth.png"
+                    )
+                    Image.fromarray(depth_colored).save(depth_save_path)
+                    
+                    # 3. 保存原始深度值（numpy格式，用于数值分析）
+                    depth_npy_path = os.path.join(
+                        self._teacher_depth_dir,
+                        f"step{step:06d}_batch{idx}_scale{scale}_depth.npy"
+                    )
+                    np.save(depth_npy_path, depth_np)
+                    
+                    # 4. 保存统计信息
+                    if step % 100 == 0:  # 每100步保存一次统计信息
+                        stats_path = os.path.join(
+                            self._teacher_debug_dir,
+                            f"step{step:06d}_batch{idx}_scale{scale}_stats.txt"
+                        )
+                        with open(stats_path, 'w') as f:
+                            f.write(f"Step: {step}, Batch: {idx}, Scale: {scale}\n")
+                            f.write(f"Disp - Min: {disp_np.min():.6f}, Max: {disp_np.max():.6f}, Mean: {disp_np.mean():.6f}\n")
+                            f.write(f"Depth - Min: {depth_np.min():.6f}, Max: {depth_np.max():.6f}, Mean: {depth_np.mean():.6f}\n")
 
     def save_opts(self):
         """Save options to disk so we know what we ran this experiment with
@@ -1189,7 +1325,20 @@ class Trainer:
         if not os.path.exists(save_folder):
             os.makedirs(save_folder)
 
+        # 排除教师模型（它们是预训练的冻结模型，不应该被保存到检查点）
+        # 教师模型包括：
+        #   - depth_anything_v3_teacher: Depth Anything V3 教师模型
+        #   - depth_anything_teacher: Depth Anything V1/V2 教师模型
+        #   - pre_depth_encoder + pre_depth_decoder: 传统 encoder-decoder 教师模型
+        teacher_model_keys = ["depth_anything_v3_teacher", "depth_anything_teacher", 
+                             "pre_depth_encoder", "pre_depth_decoder"]
+        
         for model_name, model in self.models.items():
+            # 跳过教师模型
+            if model_name in teacher_model_keys:
+                print(f"→ 跳过教师模型: {model_name}（教师模型不保存到检查点）")
+                continue
+                
             save_path = os.path.join(save_folder, "{}.pth".format(model_name))
             to_save = model.state_dict()
             if model_name == 'encoder':
@@ -1210,9 +1359,31 @@ class Trainer:
             "Cannot find folder {}".format(self.opt.load_weights_folder)
         print("loading model from folder {}".format(self.opt.load_weights_folder))
 
+        # 排除教师模型（它们是预训练的冻结模型，从各自的源加载，不从检查点加载）
+        # 教师模型包括：
+        #   - depth_anything_v3_teacher: 从 HuggingFace 或本地路径加载
+        #   - depth_anything_teacher: 从 HuggingFace 或本地路径加载
+        #   - pre_depth_encoder + pre_depth_decoder: 从 teacher_weights_folder 加载
+        teacher_model_keys = ["depth_anything_v3_teacher", "depth_anything_teacher", 
+                             "pre_depth_encoder", "pre_depth_decoder"]
+
         for n in self.opt.models_to_load:
+            # 跳过教师模型
+            if n in teacher_model_keys:
+                print("→ 跳过教师模型: {} (教师模型从各自的源加载，不从检查点加载)".format(n))
+                continue
+                
+            # 检查模型是否存在
+            if n not in self.models:
+                print("Warning: Model '{}' not found in self.models, skipping...".format(n))
+                continue
+                
             print("Loading {} weights...".format(n))
             path = os.path.join(self.opt.load_weights_folder, "{}.pth".format(n))
+            if not os.path.exists(path):
+                print("Warning: Weight file '{}' not found, skipping...".format(path))
+                continue
+                
             model_dict = self.models[n].state_dict()
             pretrained_dict = torch.load(path)
             pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict}

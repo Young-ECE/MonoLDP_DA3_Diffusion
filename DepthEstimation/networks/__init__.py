@@ -10,3 +10,7 @@ from .pose_decoder_third import PoseDecoderThird
 
 from .scale_net import ScaleNetwork
 from .scale_net import ProbabilisticScaleRegressionHead
+
+# Depth Anything teacher model
+from .depth_anything_wrapper import DepthAnythingWrapper, create_depth_anything_teacher
+from .depth_anything_v3_wrapper import DepthAnythingV3Wrapper, create_depth_anything_v3_teacher

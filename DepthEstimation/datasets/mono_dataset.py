@@ -172,7 +172,7 @@ class MonoDataset(data.Dataset):
                     keysets = keysets[:, np.random.randint(keysets.shape[1], size=num_struct_keysets//2**i)]
                 else:
                     # no a keyset found (no detected planes or lines)
-                    keysets = np.zeros((keyset_samples, num_struct_keysets//2**i), dtype=np.int)
+                    keysets = np.zeros((keyset_samples, num_struct_keysets//2**i), dtype=np.int32)
 
                 inputs[(n + "_keysets", im, i)] = torch.from_numpy(keysets).long()
 
