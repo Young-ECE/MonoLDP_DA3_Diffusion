@@ -26,3 +26,6 @@ python train.py \
     --learning_rate 5e-5 \
     --diffusion_l1_weight 1.0 \
     --diffusion_ddim_weight 1.0
+
+
+  https://huggingface.co/depth-anything/Depth-Anything-V2-Small/resolve/main/depth_anything_v2_vits.pth

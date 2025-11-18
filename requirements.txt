@@ -8,3 +8,15 @@ Pillow==8.2.0
 tensorboardX==2.1
 tqdm
 ipython
+
+# Depth Anything dependencies
+transformers>=4.30.0
+timm>=0.9.0
+huggingface_hub>=0.14.0
+
+# Depth Anything V3 dependencies
+# Install from GitHub: pip install git+https://github.com/ByteDance-Seed/Depth-Anything-3.git
+# Or: pip install depth-anything-3 (if available on PyPI)
+
+# Optional: Install Depth Anything V2 from source for better performance
+# git+https://github.com/DepthAnything/Depth-Anything-V2.git
