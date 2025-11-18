@@ -24,24 +24,19 @@ from IPython import embed
 
 import torch.nn.functional as F
 import os
-from PIL import Image
 
 
 class Trainer:
     def __init__(self, options):
         self.opt = options
-        # self.log_path = os.path.join(self.opt.log_dir, self.opt.model_name)
         import datetime
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_path = os.path.join(self.opt.log_dir, f"{self.opt.model_name}_{timestamp}")
         print("-> Log path: {}".format(self.log_path))
         print("-> Model name: {}".format(self.opt.model_name))
         self.debug_no_save = getattr(self.opt, "debug_no_save", False)
-        self.debug_save_teacher = getattr(self.opt, "debug_save_teacher", False)
         if self.debug_no_save:
             print("⚠ Debug mode enabled: training artifacts will not be written to disk.")
-        if self.debug_save_teacher:
-            print("→ Debug teacher snapshot saving enabled.")
 
         # checking height and width are multiples of 32
         assert self.opt.height % 32 == 0, "'height' must be a multiple of 32"
@@ -79,156 +74,62 @@ class Trainer:
         self.models["regression"].to(self.device)
         self.parameters_to_train += list(self.models["regression"].parameters())
         
-        # 深度解码器初始化
-        if self.opt.use_diffusion:
-            print("=" * 60)
-            print("🔄 使用扩散深度解码器")
-            print("=" * 60)
-            
-            # 判断使用哪种教师模型（三选一：DA3 / DA2-DA1 / 传统）
-            if self.opt.use_depth_anything_v3:
-                print("📦 使用 Depth Anything V3 作为教师模型")
-                print(f"   - 模型: {self.opt.depth_anything_v3_model}")
-                print(f"   - 教师模型：仅加载 depth_anything_v3_teacher")
-                
-                # 创建 Depth Anything V3 教师模型（仅此一个教师模型）
-                self.models["depth_anything_v3_teacher"] = networks.create_depth_anything_v3_teacher(
-                    model_name=self.opt.depth_anything_v3_model,
-                    device=self.device,
-                    scales=self.opt.scales,
-                    input_size=(self.opt.height, self.opt.width),
-                    model_path=self.opt.depth_anything_v3_weights
-                )
-                self.models["depth_anything_v3_teacher"].eval()
-                
-                # 标记使用 Depth Anything V3（互斥标记）
-                self.use_depth_anything_v3_teacher = True
-                self.use_depth_anything_teacher = False
-                self.use_traditional_teacher = False
-                
-                print("✓ Depth Anything V3 教师模型加载成功")
-                print("   注意：不会创建 pre_depth_encoder/pre_depth_decoder")
-                print("   注意：不会创建 depth_anything_teacher (V1/V2)")
-                print("=" * 60)
-                
-            elif self.opt.use_depth_anything:
-                print("📦 使用 Depth Anything V2/V1 作为教师模型")
-                print(f"   - 模型类型: {self.opt.depth_anything_model_type}")
-                print(f"   - 版本: {self.opt.depth_anything_version}")
-                print(f"   - 教师模型：仅加载 depth_anything_teacher")
-                
-                # 创建 Depth Anything 教师模型（仅此一个教师模型）
-                self.models["depth_anything_teacher"] = networks.create_depth_anything_teacher(
-                    model_type=self.opt.depth_anything_model_type,
-                    version=self.opt.depth_anything_version,
-                    device=self.device,
-                    scales=self.opt.scales,
-                    input_size=(self.opt.height, self.opt.width),
-                    model_path=self.opt.depth_anything_weights
-                )
-                self.models["depth_anything_teacher"].eval()
-                
-                # 标记使用 Depth Anything（互斥标记）
-                self.use_depth_anything_teacher = True
-                self.use_depth_anything_v3_teacher = False
-                self.use_traditional_teacher = False
-                
-                print("✓ Depth Anything V1/V2 教师模型加载成功")
-                print("   注意：不会创建 pre_depth_encoder/pre_depth_decoder")
-                print("   注意：不会创建 depth_anything_v3_teacher")
-                print("=" * 60)
-                
-            else:
-                print("📦 使用传统 encoder-decoder 作为教师模型")
-                print(f"   - 教师模型：加载 pre_depth_encoder + pre_depth_decoder")
-                
-                # 1. 创建教师模型（冻结的预训练模型）
-                self.models["pre_depth_encoder"] = networks.ResnetEncoder(
-                    self.opt.num_layers, self.opt.weights_init == "pretrained")
-                self.models["pre_depth_decoder"] = networks.DepthDecoder(
-                    self.models["pre_depth_encoder"].num_ch_enc, 
-                    self.opt.scales,
-                    PixelCoorModu = not self.opt.disable_pixel_coordinate_modulation)
-                
-                # 2. 加载教师模型权重（如果提供）
-                if self.opt.teacher_weights_folder is not None:
-                    teacher_path = self.opt.teacher_weights_folder
-                    encoder_path = os.path.join(teacher_path, "encoder.pth")
-                    decoder_path = os.path.join(teacher_path, "depth.pth")
-                    
-                    if os.path.exists(encoder_path) and os.path.exists(decoder_path):
-                        print(f"→ 加载教师模型: {teacher_path}")
-                        encoder_dict = torch.load(encoder_path)
-                        decoder_dict = torch.load(decoder_path)
-                        
-                        model_dict = self.models["pre_depth_encoder"].state_dict()
-                        depth_model_dict = self.models["pre_depth_decoder"].state_dict()
-                        
-                        self.models["pre_depth_encoder"].load_state_dict(
-                            {k: v for k, v in encoder_dict.items() if k in model_dict}
-                        )
-                        self.models["pre_depth_decoder"].load_state_dict(
-                            {k: v for k, v in decoder_dict.items() if k in depth_model_dict}
-                        )
-                        print("✓ 教师模型加载成功")
-                    else:
-                        print(f"⚠ 警告: 教师权重未找到于 {teacher_path}")
-                        print("→ 教师模型将从头训练")
-                else:
-                    print("⚠ 未指定教师模型路径，教师模型将使用与学生相同的初始化")
-                
-                # 3. 冻结教师模型
-                for param in self.models["pre_depth_encoder"].parameters():
-                    param.requires_grad = False
-                for param in self.models["pre_depth_decoder"].parameters():
-                    param.requires_grad = False
-                
-                self.models["pre_depth_encoder"].to(self.device)
-                self.models["pre_depth_decoder"].to(self.device)
-                self.models["pre_depth_encoder"].eval()
-                self.models["pre_depth_decoder"].eval()
-                
-                # 标记使用传统教师（互斥标记）
-                self.use_depth_anything_teacher = False
-                self.use_depth_anything_v3_teacher = False
-                self.use_traditional_teacher = True
-                
-                print("✓ 传统 encoder-decoder 教师模型加载成功")
-                print("   注意：不会创建 depth_anything_teacher (V1/V2)")
-                print("   注意：不会创建 depth_anything_v3_teacher")
-                print("=" * 60)
-            
-            # 4. 创建学生模型（带扩散）
-            # Note: Diffusion decoder outputs single-channel disparity (num_output_channels=1)
-            # and does not use PixelCoorModu (follows MonoDiffusion architecture)
-            self.models["depth"] = networks.DepthDecoderDiffusion(
-                self.models["encoder"].num_ch_enc, 
-                self.opt.scales,
-                num_output_channels=1,
-                use_skips=True)
-            print("✓ 扩散解码器初始化成功")
-            print("=" * 60)
-        else:
-            # 不使用扩散，使用原始解码器（不需要教师模型）
-            self.models["depth"] = networks.DepthDecoder(
-                self.models["encoder"].num_ch_enc, 
-                self.opt.scales,
-                PixelCoorModu = not self.opt.disable_pixel_coordinate_modulation)
-            
-            # 标记不使用任何教师模型（因为不使用扩散）
-            self.use_depth_anything_teacher = False
-            self.use_depth_anything_v3_teacher = False
-            self.use_traditional_teacher = False
-            
-            print("→ 不使用扩散，无需教师模型")
+        # 深度解码器初始化 - 使用扩散解码器 + Depth Anything V3 教师模型
+        print("=" * 60)
+        print("🔄 使用扩散深度解码器 + Depth Anything V3 教师模型")
+        print("=" * 60)
+        
+        # 创建 Depth Anything V3 教师模型
+        print(f"📦 加载 Depth Anything V3 教师模型: {self.opt.depth_anything_v3_model}")
+        self.models["depth_anything_v3_teacher"] = networks.create_depth_anything_v3_teacher(
+            model_name=self.opt.depth_anything_v3_model,
+            device=self.device,
+            scales=self.opt.scales,
+            input_size=(self.opt.height, self.opt.width),
+            model_path=self.opt.depth_anything_v3_weights
+        )
+        self.models["depth_anything_v3_teacher"].eval()
+        print("✓ Depth Anything V3 教师模型加载成功")
+        
+        # 创建学生模型（扩散解码器）
+        # Note: Diffusion decoder outputs single-channel disparity (num_output_channels=1)
+        # and does not use PixelCoorModu (follows MonoDiffusion architecture)
+        self.models["depth"] = networks.DepthDecoderDiffusion(
+            self.models["encoder"].num_ch_enc, 
+            self.opt.scales,
+            num_output_channels=1,
+            use_skips=True)
+        print("✓ 扩散解码器初始化成功")
+        print("=" * 60)
         
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
 
+        # ====================================================================
+        # Pose 模块初始化
+        # ====================================================================
+        # Pose模块采用共享编码器 + 三个独立解码器的架构：
+        # 1. pose_encoder: 共享的ResNet编码器，用于提取多帧图像的特征
+        #    输入: 拼接后的多帧图像 (B, 6, H, W) 或 (B, 3*N, H, W)
+        #    输出: 5个多尺度特征图列表
+        #
+        # 2. pose_rec: 用于predict_poses_ori，预测原始输入帧之间的pose
+        #    输入: pose_encoder提取的特征
+        #    输出: axisangle和translation，用于生成cam_T_cam_ori变换矩阵
+        #
+        # 3. pose: 用于predict_poses_second，预测第一次重投影后帧之间的pose
+        #    输入: pose_encoder提取的特征（基于第一次重投影后的图像）
+        #    输出: axisangle和translation，用于生成cam_T_cam_second变换矩阵
+        #
+        # 4. pose_third: 用于predict_poses_third，预测第二次重投影后帧之间的pose
+        #    输入: pose_encoder提取的特征（基于第二次重投影后的图像）
+        #    输出: axisangle和translation，用于生成cam_T_cam_third变换矩阵
+        #
+        # 数据流: 原始图像 → pose_rec → 第一次重投影 → pose → 第二次重投影 → pose_third
+        # ====================================================================
         self.models["pose_encoder"] = networks.ResnetEncoder(self.opt.num_layers,
                                                              self.opt.weights_init == "pretrained",
                                                              num_input_images=self.num_pose_frames)
-        # print("pose_encoder weights init:", self.opt.weights_init)
         self.models["pose_encoder"].to(self.device)
         self.parameters_to_train += list(self.models["pose_encoder"].parameters())
 
@@ -238,31 +139,17 @@ class Trainer:
         self.models["pose"].to(self.device)
         self.parameters_to_train += list(self.models["pose"].parameters())
 
-        ####add pose_rec
         self.models["pose_rec"] = networks.PoseDecoderRec(self.models["pose_encoder"].num_ch_enc,
                                                    num_input_features=1,
                                                    num_frames_to_predict_for=(self.num_pose_frames-1))
         self.models["pose_rec"].to(self.device)
         self.parameters_to_train += list(self.models["pose_rec"].parameters())
 
-        ####add pose_Third
         self.models["pose_third"] = networks.PoseDecoderThird(self.models["pose_encoder"].num_ch_enc,
                                                    num_input_features=1,
                                                    num_frames_to_predict_for=(self.num_pose_frames-1))
         self.models["pose_third"].to(self.device)
         self.parameters_to_train += list(self.models["pose_third"].parameters())
-
-        # if torch.cuda.device_count() > 1:
-        #     print("-> Using {} GPUs for training".format(torch.cuda.device_count()))
-        #     for key in self.models.keys():
-        #         # Only apply DataParallel to encoder and scalenet
-        #         # Pose models have complex dependencies, keep them on single GPU
-        #         if key in ["encoder", "scalenet"]:
-        #             self.models[key] = nn.DataParallel(self.models[key])
-        #     self.device = torch.device("cuda:0")
-        #     print("-> Note: encoder and scalenet use multi-GPU; pose and depth models use single GPU")
-        # else:
-        #     print("-> Using single GPU")
 
         self.model_optimizer = optim.Adam(self.parameters_to_train, self.opt.learning_rate)
         self.model_lr_scheduler = optim.lr_scheduler.StepLR(
@@ -345,8 +232,111 @@ class Trainer:
         print("There are {:d} training items and {:d} validation items\n".format(
             len(train_dataset), len(val_dataset)))
 
+        # 打印所有配置项
+        self.print_config()
+
         if not self.debug_no_save:
             self.save_opts()
+
+    def print_config(self):
+        """打印所有训练配置项，方便审查"""
+        print("\n" + "=" * 80)
+        print("训练配置项汇总")
+        print("=" * 80)
+        
+        # 路径配置
+        print("\n【路径配置】")
+        print(f"  数据路径: {self.opt.data_path}")
+        print(f"  日志目录: {self.log_path}")
+        print(f"  模型名称: {self.opt.model_name}")
+        print(f"  数据集: {self.opt.dataset}")
+        print(f"  数据分割: {self.opt.split}")
+        if self.opt.load_weights_folder:
+            print(f"  加载权重文件夹: {self.opt.load_weights_folder}")
+            print(f"  加载的模型: {self.opt.models_to_load}")
+        
+        # 模型配置
+        print("\n【模型配置】")
+        print(f"  ResNet层数: {self.opt.num_layers}")
+        print(f"  权重初始化: {self.opt.weights_init}")
+        print(f"  输入图像尺寸: {self.opt.height} x {self.opt.width}")
+        print(f"  训练尺度: {self.opt.scales}")
+        print(f"  输入帧ID: {self.opt.frame_ids}")
+        print(f"  Pose模型输入: {self.opt.pose_model_input}")
+        print(f"  深度范围: [{self.opt.min_depth}, {self.opt.max_depth}]")
+        
+        # 扩散模型配置
+        print("\n【扩散模型配置】")
+        print(f"  使用扩散解码器: True (固定)")
+        print(f"  Depth Anything V3模型: {self.opt.depth_anything_v3_model}")
+        if self.opt.depth_anything_v3_weights:
+            print(f"  DA3权重路径: {self.opt.depth_anything_v3_weights}")
+        print(f"  扩散L1损失权重: {self.opt.diffusion_l1_weight}")
+        print(f"  扩散DDIM损失权重: {self.opt.diffusion_ddim_weight}")
+        print(f"  扩散推理步数: {self.opt.diffusion_steps}")
+        print(f"  扩散训练时间步: {self.opt.diffusion_timesteps}")
+        
+        # 训练配置
+        print("\n【训练配置】")
+        print(f"  批次大小: {self.opt.batch_size}")
+        print(f"  训练轮数: {self.opt.num_epochs}")
+        print(f"  学习率: {self.opt.learning_rate}")
+        print(f"  学习率调度器步长: {self.opt.scheduler_step_size}")
+        print(f"  数据加载线程数: {self.opt.num_workers}")
+        print(f"  使用CUDA: {not self.opt.no_cuda}")
+        
+        # 损失函数配置
+        print("\n【损失函数配置】")
+        print(f"  平滑损失权重: {self.opt.smoothness_weight}")
+        print(f"  平面正则化权重: {self.opt.plane_weight}")
+        print(f"  线正则化权重: {self.opt.line_weight}")
+        print(f"  禁用SSIM: {self.opt.no_ssim}")
+        print(f"  禁用平面平滑: {self.opt.disable_plane_smoothness}")
+        print(f"  禁用平面正则化: {self.opt.disable_plane_regularization}")
+        print(f"  禁用线正则化: {self.opt.disable_line_regularization}")
+        if not self.opt.disable_plane_regularization:
+            print(f"  平面keysets数量: {self.opt.num_plane_keysets}")
+        if not self.opt.disable_line_regularization:
+            print(f"  线keysets数量: {self.opt.num_line_keysets}")
+        
+        # 日志配置
+        print("\n【日志配置】")
+        print(f"  日志频率: {self.opt.log_frequency}")
+        print(f"  保存频率: {self.opt.save_frequency}")
+        print(f"  调试模式(不保存): {self.debug_no_save}")
+        
+        # 评估配置
+        print("\n【评估配置】")
+        print(f"  禁用中位数缩放: {self.opt.disable_median_scaling}")
+        print(f"  预测深度缩放因子: {self.opt.pred_depth_scale_factor}")
+        print(f"  后处理: {self.opt.post_process}")
+        print(f"  评估分割: {self.opt.eval_split}")
+        print(f"  禁用评估: {self.opt.no_eval}")
+        
+        # 设备信息
+        print("\n【设备信息】")
+        print(f"  使用设备: {self.device}")
+        if not self.opt.no_cuda and torch.cuda.is_available():
+            print(f"  CUDA设备数量: {torch.cuda.device_count()}")
+            print(f"  当前CUDA设备: {torch.cuda.current_device()}")
+            print(f"  CUDA设备名称: {torch.cuda.get_device_name(0)}")
+        
+        # 数据集信息
+        print("\n【数据集信息】")
+        print(f"  训练样本数: {len(self.train_loader.dataset)}")
+        print(f"  验证样本数: {len(self.val_loader.dataset)}")
+        print(f"  总训练步数: {self.num_total_steps}")
+        
+        # 模型参数统计
+        print("\n【模型参数统计】")
+        total_params = sum(p.numel() for p in self.parameters_to_train)
+        trainable_params = sum(p.numel() for p in self.parameters_to_train if p.requires_grad)
+        print(f"  可训练参数总数: {total_params:,} ({total_params/1e6:.2f}M)")
+        print(f"  需要梯度的参数: {trainable_params:,} ({trainable_params/1e6:.2f}M)")
+        
+        print("\n" + "=" * 80)
+        print("配置审查完成，开始训练...")
+        print("=" * 80 + "\n")
 
     def set_train(self):
         """Convert all models to training mode
@@ -398,11 +388,15 @@ class Trainer:
             run_step += 1
             loss_sum += losses["loss"].cpu().data
 
-            # log less frequently after the first 2000 steps to save time & disk space
-            early_phase = batch_idx % self.opt.log_frequency == 0 and self.step < 2000
-            late_phase = self.step % 2000 == 0
+            # log less frequently to save time & disk space
+            # 前100步每10步写入一次，100-5000步每200步写入一次，之后每5000步写入一次
+            should_log = (
+                (self.step > 0 and self.step <= 100 and self.step % 10 == 0) or
+                (self.step > 100 and self.step < 5000 and self.step % 200 == 0) or
+                (self.step >= 5000 and self.step % 5000 == 0)
+            )
 
-            if early_phase or late_phase:
+            if should_log:
                 self.log_time(batch_idx, duration, loss_sum/run_step)
 
                 if "depth_gt" in inputs:
@@ -424,49 +418,27 @@ class Trainer:
         for key, ipt in inputs.items():
             inputs[key] = ipt.to(self.device)
 
-        norm_pix_coords = [inputs[("norm_pix_coords", s)] for s in self.opt.scales]
-
-        # 如果使用扩散模块
-        if self.opt.use_diffusion:
-            # 1. 使用教师模型生成伪GT（教师模型已冻结，使用eval模式）
-            with torch.no_grad():
-                if self.use_depth_anything_v3_teacher:
-                    # 使用 Depth Anything V3 作为教师
-                    # 注意：Depth Anything V3 需要 RGB 图像输入 (0-1 范围)
-                    pre_outputs = self.models["depth_anything_v3_teacher"](inputs[("color_aug", 0, 0)])
-                elif self.use_depth_anything_teacher:
-                    # 使用 Depth Anything V2/V1 作为教师
-                    # 注意：Depth Anything 需要 RGB 图像输入 (0-1 范围)
-                    # inputs[("color_aug", 0, 0)] 已经在 0-1 范围内
-                    pre_outputs = self.models["depth_anything_teacher"](inputs[("color_aug", 0, 0)])
-                else:
-                    # 使用传统 encoder-decoder 作为教师
-                    pre_features = self.models["pre_depth_encoder"](inputs[("color_aug", 0, 0)])
-                    pre_outputs = self.models["pre_depth_decoder"](pre_features, norm_pix_coords)
-                
-                if self.debug_save_teacher:
-                    self._save_teacher_debug(pre_outputs)
-            
-            # 2. 学生模型前向传播
-            features = self.models["encoder"](inputs[("color_aug", 0, 0)])
-            
-            # 3. 准备扩散的伪GT（从教师模型的预测）
-            gt_for_diffusion = {}
-            for scale in self.opt.scales:
-                # 使用教师的 disp 作为扩散的目标
-                gt_for_diffusion[("disp_diffusion", scale)] = pre_outputs[("disp", scale)].detach()
-            
-            # 4. 使用扩散解码器
-            # Note: Diffusion decoder does not use norm_pix_coords (follows MonoDiffusion)
-            outputs = self.models["depth"](features, gt_for_diffusion)
-            
-            # 5. 保存教师的预测，用于后续损失计算和可视化
-            for scale in self.opt.scales:
-                outputs[("predisp", scale)] = pre_outputs[("disp", scale)]
-        else:
-            # 不使用扩散，使用原始的深度解码器
-            features = self.models["encoder"](inputs[("color_aug", 0, 0)])
-            outputs = self.models["depth"](features, norm_pix_coords)
+        # 使用 Depth Anything V3 教师模型生成伪GT（教师模型已冻结，使用eval模式）
+        with torch.no_grad():
+            # Depth Anything V3 需要 RGB 图像输入 (0-1 范围)
+            pre_outputs = self.models["depth_anything_v3_teacher"](inputs[("color_aug", 0, 0)])
+        
+        # 学生模型前向传播
+        features = self.models["encoder"](inputs[("color_aug", 0, 0)])
+        
+        # 准备扩散的伪GT（从教师模型的预测）
+        gt_for_diffusion = {}
+        for scale in self.opt.scales:
+            # 使用教师的 disp 作为扩散的目标
+            gt_for_diffusion[("disp_diffusion", scale)] = pre_outputs[("disp", scale)].detach()
+        
+        # 使用扩散解码器
+        # Note: Diffusion decoder does not use norm_pix_coords (follows MonoDiffusion)
+        outputs = self.models["depth"](features, gt_for_diffusion)
+        
+        # 保存教师的预测，用于后续损失计算和可视化
+        for scale in self.opt.scales:
+            outputs[("predisp", scale)] = pre_outputs[("disp", scale)]
 
         outputs.update(self.predict_poses_ori(inputs))
         self.generate_images_pred_ori(inputs, outputs)
@@ -479,34 +451,37 @@ class Trainer:
 
         losses = self.compute_losses(inputs, outputs)
         
-        # 如果使用扩散，添加额外的损失
-        if self.opt.use_diffusion:
-            # L1损失：学生与教师的一致性
-            l1_loss = 0
-            for scale in self.opt.scales:
-                l1_loss += F.l1_loss(outputs[("predisp", scale)], outputs[("disp", scale)])
-            losses['l1'] = l1_loss / len(self.opt.scales)
-            
-            # DDIM损失：扩散模型的去噪损失
-            ddim_loss = 0
-            for scale in self.opt.scales:
-                if ("ddim_loss", scale) in outputs:
-                    ddim_loss += outputs[("ddim_loss", scale)]
-            losses['ddim'] = ddim_loss / len(self.opt.scales) if ddim_loss != 0 else torch.tensor(0.0).to(self.device)
-            
-            # 保存原始光度损失
-            losses['photometric'] = losses["loss"].clone()
-            
-            # 总损失 = 光度损失 + L1损失 + DDIM损失
-            losses["loss"] = (1.0 * losses['photometric'] + 
-                             self.opt.diffusion_l1_weight * losses['l1'] + 
-                             self.opt.diffusion_ddim_weight * losses['ddim'])
+        # 扩散相关损失
+        # L1损失：学生与教师的一致性
+        l1_loss = 0
+        for scale in self.opt.scales:
+            l1_loss += F.l1_loss(outputs[("predisp", scale)], outputs[("disp", scale)])
+        losses['l1'] = l1_loss / len(self.opt.scales)
+        
+        # DDIM损失：扩散模型的去噪损失
+        ddim_loss = 0
+        for scale in self.opt.scales:
+            if ("ddim_loss", scale) in outputs:
+                ddim_loss += outputs[("ddim_loss", scale)]
+        losses['ddim'] = ddim_loss / len(self.opt.scales) if ddim_loss != 0 else torch.tensor(0.0).to(self.device)
+        
+        # 保存原始光度损失
+        losses['photometric'] = losses["loss"].clone()
+        
+        # 总损失 = 光度损失 + L1损失 + DDIM损失
+        losses["loss"] = (1.0 * losses['photometric'] + 
+                         self.opt.diffusion_l1_weight * losses['l1'] + 
+                         self.opt.diffusion_ddim_weight * losses['ddim'])
 
         return outputs, losses
 
 
     def predict_poses_ori(self, inputs):
-        """Predict poses between input frames for monocular sequences.
+        """预测原始输入帧之间的pose（第一次pose预测）
+        
+        使用pose_encoder + pose_rec解码器
+        输入: 原始输入图像帧
+        输出: cam_T_cam_ori变换矩阵，用于第一次图像重投影
         """
         outputs = {}
         if self.num_pose_frames == 2:
@@ -577,7 +552,11 @@ class Trainer:
         return outputs
 
     def predict_poses_second(self, inputs, outputs):
-        """Predict poses between input frames for monocular sequences.
+        """预测第一次重投影后帧之间的pose（第二次pose预测）
+        
+        使用pose_encoder + pose解码器
+        输入: 第一次重投影后的图像（color_aug_ori）
+        输出: cam_T_cam_second变换矩阵，用于第二次图像重投影
         """
 
         if self.num_pose_frames == 2:
@@ -649,7 +628,11 @@ class Trainer:
         return outputs
 
     def predict_poses_third(self, inputs, outputs):
-        """Predict poses between input frames for monocular sequences.
+        """预测第二次重投影后帧之间的pose（第三次pose预测）
+        
+        使用pose_encoder + pose_third解码器
+        输入: 第二次重投影后的图像（color_aug）
+        输出: cam_T_cam_third变换矩阵，用于第三次图像重投影
         """
        
         if self.num_pose_frames == 2:
@@ -737,9 +720,6 @@ class Trainer:
             if not self.opt.disable_line_regularization:
                 losses_sum["line_loss/" + str(s)] = 0.0
                 losses_avg["line_loss/" + str(s)] = 0.0
-            for frame_id in self.opt.frame_ids[1:]:
-                losses_sum["depth_consistency_loss/{}_{}".format(s, frame_id)] = 0.0
-                losses_avg["depth_consistency_loss/{}_{}".format(s, frame_id)] = 0.0
 
         for name in self.depth_metric_names:
             losses_sum[name] = 0.0
@@ -1027,31 +1007,6 @@ class Trainer:
         return reprojection_loss            
 
     
-    
-    def compute_depth_consistency_loss(self, depth_t, depth_t_prime):
-        """
-        Compute the depth consistency loss between two predicted depth maps.
-
-        Args:
-            depth_t (torch.Tensor): Predicted depth map of the target image.
-            depth_t_prime (torch.Tensor): Predicted depth map of the source image.
-
-        Returns:
-            torch.Tensor: Depth consistency loss.
-        """
-        # Ensure depth tensors are three-dimensional
-        if len(depth_t.shape) == 4:
-            depth_t = depth_t.squeeze(1)  # Remove the channel dimension if it exists
-        if len(depth_t_prime.shape) == 4:
-            depth_t_prime = depth_t_prime.squeeze(1)  # Remove the channel dimension if it exists
-
-        # Compute depth consistency loss
-        depth_consistency_loss = torch.abs(depth_t - depth_t_prime) / (depth_t + depth_t_prime)
-        depth_consistency_loss = torch.mean(depth_consistency_loss)
-
-        return depth_consistency_loss
-
-    
 
     def compute_losses(self, inputs, outputs):
         """Compute the reprojection and smoothness losses for a minibatch
@@ -1115,24 +1070,6 @@ class Trainer:
                 line_loss = get_line_loss(inputs[("line_keysets", 0, scale)], norm_point3D)
                 loss += self.opt.line_weight * line_loss
                 losses["line_loss/{}".format(scale)] = line_loss
-            
-                # calculate the depth consistency loss
-            for frame_id in self.opt.frame_ids[1:]:
-                depth_ori = outputs[("depth_ori", 0, scale)].squeeze(1)  
-                depth_second = outputs[("depth_second", 0, scale)].squeeze(1) 
-                depth_third = outputs[("depth_third", 0, scale)].squeeze(1)  
-                
-                #compute the consistency among synthesized views
-                depth_consistency_loss_ori_second = self.compute_depth_consistency_loss(depth_ori, depth_second)
-                depth_consistency_loss_ori_third = self.compute_depth_consistency_loss(depth_ori, depth_third)
-                depth_consistency_loss_second_third = self.compute_depth_consistency_loss(depth_second, depth_third)
-
-                depth_consistency_loss = (depth_consistency_loss_ori_second +
-                                          depth_consistency_loss_ori_third +
-                                          depth_consistency_loss_second_third) / 3.0
-
-                loss += self.opt.depth_consistency_weight * depth_consistency_loss
-                losses["depth_consistency_loss/{}_{}".format(scale, frame_id)] = depth_consistency_loss
             
             losses["loss/{}".format(scale)] = loss
             total_loss += loss
@@ -1217,91 +1154,16 @@ class Trainer:
                             "color_pred_{}_{}/{}".format(frame_id, s, j),
                             outputs[("color", frame_id, s)][j].data, self.step)
 
+                # 学生模型（扩散解码器）的预测视差图
                 writer.add_image(
-                    "disp_{}/{}".format(s, j),
+                    "disp_student_{}/{}".format(s, j),
                     normalize_image(outputs[("disp", s)][j]), self.step)
-
-    def _save_teacher_debug(self, pre_outputs):
-        """Save teacher disparity and depth visualizations for debugging purposes."""
-        if not hasattr(self, "_teacher_debug_dir"):
-            self._teacher_debug_dir = os.path.join(self.log_path, "teacher_outputs")
-            os.makedirs(self._teacher_debug_dir, exist_ok=True)
-            # 创建子目录
-            self._teacher_disp_dir = os.path.join(self._teacher_debug_dir, "disparity")
-            self._teacher_depth_dir = os.path.join(self._teacher_debug_dir, "depth")
-            os.makedirs(self._teacher_disp_dir, exist_ok=True)
-            os.makedirs(self._teacher_depth_dir, exist_ok=True)
-            print(f"→ 教师模型输出将保存到: {self._teacher_debug_dir}")
-
-        step = getattr(self, "step", 0)
-        with torch.no_grad():
-            for scale in self.opt.scales:
-                key = ("disp", scale)
-                if key not in pre_outputs:
-                    continue
-                disp = pre_outputs[key]
-                if disp is None:
-                    continue
-                disp = disp.detach().cpu()
-                if disp.ndim != 4:
-                    continue
                 
-                batch_to_save = min(2, disp.shape[0])
-                for idx in range(batch_to_save):
-                    # 1. 保存视差图（disparity）
-                    disp_single = disp[idx:idx+1]  # (1, 1, H, W)
-                    if disp_single.shape[1] > 1:
-                        disp_single = disp_single.mean(1, keepdim=True)
-                    
-                    disp_vis = normalize_image(disp_single)
-                    disp_array = disp_vis.squeeze(0).squeeze(0).numpy()
-                    disp_array = np.clip(disp_array * 255.0, 0, 255).astype(np.uint8)
-                    disp_save_path = os.path.join(
-                        self._teacher_disp_dir,
-                        f"step{step:06d}_batch{idx}_scale{scale}_disp.png"
-                    )
-                    Image.fromarray(disp_array, mode='L').save(disp_save_path)
-                    
-                    # 2. 保存深度图（depth）- 转换为深度并可视化
-                    # 将视差转换为深度（使用简单的转换，因为这是相对深度）
-                    disp_np = disp_single.squeeze().numpy()
-                    # 避免除零
-                    depth_np = 1.0 / (disp_np + 1e-6)
-                    # 归一化深度用于可视化
-                    depth_min, depth_max = depth_np.min(), depth_np.max()
-                    if depth_max > depth_min:
-                        depth_normalized = (depth_np - depth_min) / (depth_max - depth_min)
-                    else:
-                        depth_normalized = depth_np
-                    
-                    # 使用彩色映射（jet colormap）使深度更易观察
-                    import matplotlib.pyplot as plt
-                    import matplotlib.cm as cm
-                    depth_colored = cm.jet(depth_normalized)[:, :, :3]  # (H, W, 3)
-                    depth_colored = (depth_colored * 255).astype(np.uint8)
-                    depth_save_path = os.path.join(
-                        self._teacher_depth_dir,
-                        f"step{step:06d}_batch{idx}_scale{scale}_depth.png"
-                    )
-                    Image.fromarray(depth_colored).save(depth_save_path)
-                    
-                    # 3. 保存原始深度值（numpy格式，用于数值分析）
-                    depth_npy_path = os.path.join(
-                        self._teacher_depth_dir,
-                        f"step{step:06d}_batch{idx}_scale{scale}_depth.npy"
-                    )
-                    np.save(depth_npy_path, depth_np)
-                    
-                    # 4. 保存统计信息
-                    if step % 100 == 0:  # 每100步保存一次统计信息
-                        stats_path = os.path.join(
-                            self._teacher_debug_dir,
-                            f"step{step:06d}_batch{idx}_scale{scale}_stats.txt"
-                        )
-                        with open(stats_path, 'w') as f:
-                            f.write(f"Step: {step}, Batch: {idx}, Scale: {scale}\n")
-                            f.write(f"Disp - Min: {disp_np.min():.6f}, Max: {disp_np.max():.6f}, Mean: {disp_np.mean():.6f}\n")
-                            f.write(f"Depth - Min: {depth_np.min():.6f}, Max: {depth_np.max():.6f}, Mean: {depth_np.mean():.6f}\n")
+                # 教师模型（Depth Anything V3）的预测视差图
+                if ("predisp", s) in outputs:
+                    writer.add_image(
+                        "disp_teacher_{}/{}".format(s, j),
+                        normalize_image(outputs[("predisp", s)][j]), self.step)
 
     def save_opts(self):
         """Save options to disk so we know what we ran this experiment with
@@ -1325,13 +1187,9 @@ class Trainer:
         if not os.path.exists(save_folder):
             os.makedirs(save_folder)
 
-        # 排除教师模型（它们是预训练的冻结模型，不应该被保存到检查点）
-        # 教师模型包括：
-        #   - depth_anything_v3_teacher: Depth Anything V3 教师模型
-        #   - depth_anything_teacher: Depth Anything V1/V2 教师模型
-        #   - pre_depth_encoder + pre_depth_decoder: 传统 encoder-decoder 教师模型
-        teacher_model_keys = ["depth_anything_v3_teacher", "depth_anything_teacher", 
-                             "pre_depth_encoder", "pre_depth_decoder"]
+        # 排除教师模型（它是预训练的冻结模型，不应该被保存到检查点）
+        # 教师模型：depth_anything_v3_teacher - Depth Anything V3 教师模型
+        teacher_model_keys = ["depth_anything_v3_teacher"]
         
         for model_name, model in self.models.items():
             # 跳过教师模型
@@ -1359,13 +1217,9 @@ class Trainer:
             "Cannot find folder {}".format(self.opt.load_weights_folder)
         print("loading model from folder {}".format(self.opt.load_weights_folder))
 
-        # 排除教师模型（它们是预训练的冻结模型，从各自的源加载，不从检查点加载）
-        # 教师模型包括：
-        #   - depth_anything_v3_teacher: 从 HuggingFace 或本地路径加载
-        #   - depth_anything_teacher: 从 HuggingFace 或本地路径加载
-        #   - pre_depth_encoder + pre_depth_decoder: 从 teacher_weights_folder 加载
-        teacher_model_keys = ["depth_anything_v3_teacher", "depth_anything_teacher", 
-                             "pre_depth_encoder", "pre_depth_decoder"]
+        # 排除教师模型（它是预训练的冻结模型，从各自的源加载，不从检查点加载）
+        # 教师模型：depth_anything_v3_teacher - 从 HuggingFace 或本地路径加载
+        teacher_model_keys = ["depth_anything_v3_teacher"]
 
         for n in self.opt.models_to_load:
             # 跳过教师模型

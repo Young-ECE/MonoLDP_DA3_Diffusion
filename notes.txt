@@ -1,31 +1,54 @@
-/oldisk/home/jingyang/monoldp/
-~/MonoLDP/DepthEstimation
-/oldisk/home/jingyang/monoldp/temp
-/oldisk/home/jingyang/monoldp/temp/mdp_20251106_205450/models/weights_14
+# MonoLDP 项目笔记
 
-adam.pth   encoder.pth       pose.pth      pose_third.pth  result_nyu_split.txt
-depth.pth  pose_encoder.pth  pose_rec.pth  regression.pth  scalenet.pth
-模型评估：
+## 重要路径
+
+### 数据路径
+- 数据集根目录: `/oldisk/home/jingyang/monoldp/datasets/nyu_data`
+- 训练文件列表: `DepthEstimation/splits/nyu/train_files.txt`
+- 验证文件列表: `DepthEstimation/splits/nyu/val_files.txt`
+
+### 模型路径
+- 日志目录: `/oldisk/home/jingyang/monoldp/temp`
+- 示例模型权重: `/oldisk/home/jingyang/monoldp/temp/mdp_20251106_205450/models/weights_14`
+
+### 工作目录
+- 项目根目录: `~/MonoLDP`
+- 训练代码目录: `~/MonoLDP/DepthEstimation`
+
+## 训练配置
+
+### 默认配置
+- 模型: 扩散解码器 + Depth Anything V3 教师模型
+- 输入尺寸: 256x320
+- 训练尺度: [0]
+- 批次大小: 2
+- 学习率: 1e-4
+
+### 关键参数
+- `--use_diffusion`: 使用扩散解码器（默认启用）
+- `--use_depth_anything_v3`: 使用DA3教师模型（默认启用）
+- `--depth_anything_v3_model`: DA3模型名称（默认: DA3Mono-Large）
+- `--scales`: 训练尺度（默认: [0]）
+- `--diffusion_l1_weight`: L1损失权重（默认: 1.0）
+- `--diffusion_ddim_weight`: DDIM损失权重（默认: 1.0）
+
+## 模型评估
+
+```bash
+cd DepthEstimation
 python evaluate_nyu_depth.py \
   --data_path /oldisk/home/jingyang/monoldp/datasets/nyu_data \
-  --load_weights_folder /oldisk/home/jingyang/monoldp/temp/mdp_20251106_205450/models/weights_14 \
+  --load_weights_folder <模型权重路径> \
   --batch_size 6 \
   --num_workers 8 \
   --scales 0
+```
 
+## 单张图像推理
 
-
-二阶段训练：
-python train.py \
-    --model_name diffusion_model \
-    --use_diffusion \
-    --teacher_weights_folder /oldisk/home/jingyang/monoldp/temp/mdp_20251106_205450/models/weights_14 \
-    --data_path /oldisk/home/jingyang/monoldp/datasets/nyu_data \
-    --num_epochs 10 \
-    --batch_size 6 \
-    --learning_rate 5e-5 \
-    --diffusion_l1_weight 1.0 \
-    --diffusion_ddim_weight 1.0
-
-
-  https://huggingface.co/depth-anything/Depth-Anything-V2-Small/resolve/main/depth_anything_v2_vits.pth
+```bash
+cd DepthEstimation
+python inference_single_image.py \
+  --image_path <图像路径> \
+  --load_weights_folder <模型权重路径>
+```

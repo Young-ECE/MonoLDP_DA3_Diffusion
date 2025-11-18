@@ -34,7 +34,6 @@ class MonodepthOptions:
         self.parser.add_argument("--split",
                                  type=str,
                                  help="which training split to use",
-                                 choices=["nyu","sequences"],
                                  default="nyu")
         self.parser.add_argument("--num_layers",
                                  type=int,
@@ -44,8 +43,7 @@ class MonodepthOptions:
         self.parser.add_argument("--dataset",
                                  type=str,
                                  help="dataset to train on",
-                                 default="nyu",
-                                 choices=["nyu","mydata"])
+                                 default="nyu")
         self.parser.add_argument("--height",
                                  type=int,
                                  help="input image height",
@@ -57,8 +55,8 @@ class MonodepthOptions:
         self.parser.add_argument("--scales",
                                  nargs="+",
                                  type=int,
-                                 help="scales used in the loss (for diffusion decoder, use [0, 1, 2])",
-                                 default=[0, 1, 2])
+                                 help="scales used in the loss",
+                                 default=[0])
         self.parser.add_argument("--min_depth",
                                  type=float,
                                  help="minimum depth",
@@ -127,20 +125,13 @@ class MonodepthOptions:
                                  type=float,
                                  help="line regularization weight",
                                  default=0.5)
-        self.parser.add_argument('--depth_consistency_weight', 
-                             type=float, 
-                             default=1.0, 
-                             help='Weight for depth consistency loss')
 
-        # DIFFUSION options
+        # DIFFUSION options (always enabled)
+        # Note: Diffusion decoder is always used, this flag is kept for backward compatibility
         self.parser.add_argument("--use_diffusion",
-                                help="if set, use diffusion-based depth decoder",
+                                help="[DEPRECATED] Diffusion is always enabled",
                                 action="store_true",
                                 default=True)
-        self.parser.add_argument("--teacher_weights_folder",
-                                type=str,
-                                help="path to pretrained teacher model weights",
-                                default="/oldisk/home/jingyang/monoldp/temp/mdp_20251106_205450/models/weights_14")
         self.parser.add_argument("--diffusion_steps",
                                 nargs="+",
                                 type=int,
@@ -160,31 +151,12 @@ class MonodepthOptions:
                                 default=1.0,
                                 help="weight for DDIM diffusion loss")
         
-        # DEPTH ANYTHING teacher options
-        self.parser.add_argument("--use_depth_anything",
-                                help="if set, use Depth Anything as teacher model instead of pretrained encoder-decoder",
-                                action="store_true",
-                                default=False)
-        self.parser.add_argument("--depth_anything_model_type",
-                                type=str,
-                                help="Depth Anything model size",
-                                default="vits",
-                                choices=["vits", "vitb", "vitl"])
-        self.parser.add_argument("--depth_anything_version",
-                                type=str,
-                                help="Depth Anything version",
-                                default="v2",
-                                choices=["v1", "v2"])
-        self.parser.add_argument("--depth_anything_weights",
-                                type=str,
-                                help="path to Depth Anything pretrained weights (optional, will auto-download if not provided)",
-                                default=None)
-        
-        # DEPTH ANYTHING V3 teacher options
+        # DEPTH ANYTHING V3 teacher options (always enabled)
+        # Note: Depth Anything V3 is always used as teacher model
         self.parser.add_argument("--use_depth_anything_v3",
-                                help="if set, use Depth Anything V3 as teacher model (overrides --use_depth_anything)",
+                                help="[DEPRECATED] Depth Anything V3 is always used as teacher",
                                 action="store_true",
-                                default=False)
+                                default=True)
         self.parser.add_argument("--depth_anything_v3_model",
                                 type=str,
                                 help="Depth Anything V3 model name",

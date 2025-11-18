@@ -1,24 +1,145 @@
+# MonoLDP 常用命令
 
-使用X11远程查看图片：
+## 环境配置
 
-ssh -Y jingyang@10.8.31.112
-echo $DISPLAY localhost:10.0
-xclock
+### 创建conda环境
+```bash
+conda create -n monoldp_depth python=3.8
+conda activate monoldp_depth
+pip install -r requirements.txt
+```
 
-使用tensorboard查看训练记录：
-tensorboard --logdir ./runs/monoldp_depth
+### 安装Depth Anything V3
+```bash
+# 设置HuggingFace镜像（可选，加速下载）
+export HF_ENDPOINT=https://hf-mirror.com
 
-使用screen创建训练会话：
+# 安装DA3
+pip install git+https://github.com/ByteDance-Seed/Depth-Anything-3.git
+```
+
+## 训练命令
+
+### 基础训练
+```bash
+cd DepthEstimation
+python train.py \
+  --model_name monoldp_diffusion_model \
+  --data_path /oldisk/home/jingyang/monoldp/datasets/nyu_data \
+  --batch_size 2 \
+  --num_epochs 15 \
+  --learning_rate 5e-5 \
+  --scales 0
+```
+
+### 完整训练命令（带所有参数）
+```bash
+cd DepthEstimation
+export HF_ENDPOINT=https://hf-mirror.com
+python train.py \
+  --model_name monoldp_diffusion_model \
+  --data_path /oldisk/home/jingyang/monoldp/datasets/nyu_data \
+  --batch_size 2 \
+  --num_epochs 15 \
+  --learning_rate 5e-5 \
+  --scales 0 \
+  --diffusion_l1_weight 1.0 \
+  --diffusion_ddim_weight 1.0 \
+  --log_dir /oldisk/home/jingyang/monoldp/temp
+```
+
+### 使用训练脚本
+```bash
+bash train_with_da3.sh
+```
+
+## 模型评估
+
+```bash
+cd DepthEstimation
+python evaluate_nyu_depth.py \
+  --data_path /oldisk/home/jingyang/monoldp/datasets/nyu_data \
+  --load_weights_folder <模型权重路径> \
+  --batch_size 6 \
+  --num_workers 8 \
+  --scales 0
+```
+
+## 单张图像推理
+
+```bash
+cd DepthEstimation
+python inference_single_image.py \
+  --image_path <图像路径> \
+  --load_weights_folder <模型权重路径>
+```
+
+## TensorBoard查看训练日志
+
+```bash
+# 查看最新训练日志
+tensorboard --logdir /oldisk/home/jingyang/monoldp/temp
+
+# 查看指定实验
+tensorboard --logdir /oldisk/home/jingyang/monoldp/temp/monoldp_diffusion_model_YYYYMMDD_HHMMSS
+
+# 指定端口
+tensorboard --logdir <日志路径> --port 6007
+```
+
+## 远程服务器使用
+
+### SSH端口转发（查看TensorBoard）
+```bash
+# 在本地终端执行
+ssh -L 6006:localhost:6006 username@remote_server
+
+# 然后在远程服务器启动tensorboard
+tensorboard --logdir <日志路径>
+# 在本地浏览器打开 http://localhost:6006
+```
+
+### Screen会话管理
+```bash
+# 创建训练会话
 screen -S train
-执行训练命令
-ctrl+A  D
+
+# 执行训练命令
+# ... 训练命令 ...
+
+# 分离会话: Ctrl+A, 然后按 D
+
+# 查看所有会话
 screen -ls
+
+# 恢复会话
 screen -r train
+
+# 退出会话
 exit
-ctrl+A  ESC进入screen的回滚模式
 
+# 进入回滚模式: Ctrl+A, 然后按 ESC
+```
 
-查看当前目录内存：
-du -h --max-depth=1 一级目录
-df -h . 还剩余空间
-df -h 查看目录内容
+## 系统工具
+
+### 查看磁盘空间
+```bash
+# 查看当前目录大小
+du -h --max-depth=1
+
+# 查看剩余空间
+df -h .
+
+# 查看所有挂载点
+df -h
+```
+
+### 查找最新日志
+```bash
+# 查找最新的训练日志目录
+ls -lt /oldisk/home/jingyang/monoldp/temp/ | head -5
+
+# 或使用find
+find /oldisk/home/jingyang/monoldp/temp -name "train" -type d | sort | tail -1
+```

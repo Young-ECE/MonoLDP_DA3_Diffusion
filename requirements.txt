@@ -1,22 +1,37 @@
-future
-numpy==1.19.4
-opencv_python==4.4.0.46
-scikit-image==0.16.2 
-scipy==1.5.4
-matplotlib==3.3.3
-Pillow==8.2.0
-tensorboardX==2.1
+# MonoLDP Depth Estimation with Depth Anything V3
+# Python 3.8+ required
+
+# Core dependencies
+torch>=1.7.0
+torchvision>=0.8.0
+numpy>=1.19.4
+Pillow>=8.2.0
+
+# Image processing
+opencv-python>=4.4.0
+scikit-image>=0.16.2
+scipy>=1.5.4
+matplotlib>=3.3.3
+
+# Logging and visualization
+tensorboardX>=2.1
+tensorboard>=2.0  # For viewing logs
+
+# Utilities
 tqdm
 ipython
+future
 
-# Depth Anything dependencies
+# Depth Anything V3 dependencies
+# Install from GitHub (required):
+# pip install git+https://github.com/ByteDance-Seed/Depth-Anything-3.git
 transformers>=4.30.0
 timm>=0.9.0
 huggingface_hub>=0.14.0
 
-# Depth Anything V3 dependencies
-# Install from GitHub: pip install git+https://github.com/ByteDance-Seed/Depth-Anything-3.git
-# Or: pip install depth-anything-3 (if available on PyPI)
+# Diffusion model dependencies (for depth decoder)
+# Note: diffusers schedulers are included in the project
 
-# Optional: Install Depth Anything V2 from source for better performance
-# git+https://github.com/DepthAnything/Depth-Anything-V2.git
+# Optional: For preprocessing (superpixel and line extraction)
+# Note: Requires opencv-python < 3.4.6 for line extraction
+# pip install "opencv-python<3.4.6"  # if needed for line extraction
