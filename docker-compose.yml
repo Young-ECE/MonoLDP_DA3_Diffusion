@@ -1,0 +1,35 @@
+# Docker Compose configuration for MonoLDP training
+# Usage: docker-compose up -d
+
+version: '3.8'
+
+services:
+  monoldp-train:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: monoldp:latest
+    container_name: monoldp-training
+    runtime: nvidia  # Requires nvidia-docker2
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - CUDA_VISIBLE_DEVICES=0
+      - HF_ENDPOINT=https://hf-mirror.com  # HuggingFace mirror for China
+    volumes:
+      # Mount data directory (adjust path as needed)
+      - ./data:/workspace/data:ro
+      # Mount datasets (adjust path as needed)
+      # - /path/to/your/datasets:/workspace/datasets:ro
+      # Mount logs directory (writable)
+      - ./logs:/workspace/logs
+      # Mount models directory (writable)
+      - ./models:/workspace/models
+      # Optional: Mount entire project for development
+      # - .:/workspace
+    working_dir: /workspace/DepthEstimation
+    ports:
+      - "6006:6006"  # TensorBoard
+    command: /bin/bash
+    stdin_open: true
+    tty: true
+

@@ -1,0 +1,68 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Data (exclude from image, mount as volume)
+data/
+datasets/
+*.pth
+*.pt
+*.ckpt
+*.h5
+*.hdf5
+
+# Logs and outputs
+logs/
+temp/
+*.log
+tensorboard/
+
+# Git
+.git/
+.gitignore
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# Documentation (optional, can include if needed)
+*.md
+!README.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large model files (if any)
+*.zip
+*.tar.gz
+*.tar
+
+# Cache
+.cache/
+*.cache
+
