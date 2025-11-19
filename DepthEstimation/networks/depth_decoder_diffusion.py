@@ -34,7 +34,18 @@ class DepthDecoderDiffusion(nn.Module):
     - Does not use pixel coordinate modulation
     """
     def __init__(self, num_ch_enc, scales=range(3), num_output_channels=1, 
-                 use_skips=True):
+                 use_skips=True, diffusion_steps=None, diffusion_timesteps=None):
+        """
+        Args:
+            num_ch_enc: encoder channel numbers
+            scales: list of scales to output
+            num_output_channels: number of output channels (1 for disparity)
+            use_skips: whether to use skip connections
+            diffusion_steps: list of inference steps for each scale [coarse to fine]
+                           e.g., [5, 4, 3] for scales [2, 1, 0]
+            diffusion_timesteps: list of training timesteps for each scale [coarse to fine]
+                               e.g., [250, 200, 150] for scales [2, 1, 0]
+        """
         super().__init__()
 
         self.num_output_channels = num_output_channels
@@ -88,6 +99,10 @@ class DepthDecoderDiffusion(nn.Module):
         self.diffusion_pipelines = {}
         self.diffusion_inference_steps = {}
         self.scheduler_train_steps = {}
+        
+        # 存储配置的扩散步数
+        self.diffusion_steps_config = diffusion_steps
+        self.diffusion_timesteps_config = diffusion_timesteps
 
         for idx, scale in enumerate(self._sorted_scales):
             scale_key = str(scale)
@@ -113,10 +128,24 @@ class DepthDecoderDiffusion(nn.Module):
                 nn.init.constant_(m.bias, 0)
 
     def _get_scheduler_train_steps(self, scale: int) -> int:
+        """Get training timesteps for a given scale"""
+        if self.diffusion_timesteps_config is not None:
+            # 从配置中读取：scale从大到小对应配置列表的顺序
+            scale_idx = self._sorted_scales.index(scale)
+            if scale_idx < len(self.diffusion_timesteps_config):
+                return self.diffusion_timesteps_config[scale_idx]
+        # 默认值
         default_steps = {0: 150, 1: 200, 2: 250}
         return default_steps.get(scale, 150)
 
     def _get_inference_steps(self, scale: int, index: int) -> int:
+        """Get inference steps for a given scale"""
+        if self.diffusion_steps_config is not None:
+            # 从配置中读取：scale从大到小对应配置列表的顺序
+            scale_idx = self._sorted_scales.index(scale)
+            if scale_idx < len(self.diffusion_steps_config):
+                return self.diffusion_steps_config[scale_idx]
+        # 默认值
         default_steps = {0: 3, 1: 4, 2: 5}
         return default_steps.get(scale, max(3, 5 - index))
 

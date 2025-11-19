@@ -45,8 +45,30 @@ class Trainer:
         self.models = {}
         self.parameters_to_train = []
 
-        self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
+        # 设置设备（支持指定GPU）
+        if self.opt.no_cuda:
+            self.device = torch.device("cpu")
+        else:
+            if self.opt.cuda_device is not None:
+                # 使用cuda_device参数（如 "cuda:1"）
+                self.device = torch.device(self.opt.cuda_device)
+            else:
+                # 使用gpu_id参数
+                gpu_id = getattr(self.opt, 'gpu_id', 0)
+                if torch.cuda.is_available():
+                    if gpu_id >= torch.cuda.device_count():
+                        print(f"⚠️ Warning: GPU {gpu_id} not available. Using GPU 0 instead.")
+                        gpu_id = 0
+                    self.device = torch.device(f"cuda:{gpu_id}")
+                else:
+                    print("⚠️ Warning: CUDA not available. Using CPU instead.")
+                    self.device = torch.device("cpu")
+        
         print("Using device:", self.device)
+        if not self.opt.no_cuda and torch.cuda.is_available():
+            print(f"  GPU ID: {self.device.index if hasattr(self.device, 'index') else 'N/A'}")
+            if hasattr(self.device, 'index') and self.device.index is not None:
+                print(f"  GPU Name: {torch.cuda.get_device_name(self.device.index)}")
 
         self.num_scales = len(self.opt.scales)
         print("Training scales:", self.opt.scales)
@@ -98,7 +120,9 @@ class Trainer:
             self.models["encoder"].num_ch_enc, 
             self.opt.scales,
             num_output_channels=1,
-            use_skips=True)
+            use_skips=True,
+            diffusion_steps=self.opt.diffusion_steps,
+            diffusion_timesteps=self.opt.diffusion_timesteps)
         print("✓ 扩散解码器初始化成功")
         print("=" * 60)
         
@@ -151,9 +175,25 @@ class Trainer:
         self.models["pose_third"].to(self.device)
         self.parameters_to_train += list(self.models["pose_third"].parameters())
 
-        self.model_optimizer = optim.Adam(self.parameters_to_train, self.opt.learning_rate)
-        self.model_lr_scheduler = optim.lr_scheduler.StepLR(
-            self.model_optimizer, self.opt.scheduler_step_size, 0.1)
+        # 使用AdamW优化器（带weight decay，有助于正则化和稳定性）
+        # 如果未指定weight_decay，使用默认值1e-2（参考MonoDiffusion）
+        weight_decay = getattr(self.opt, 'weight_decay', 1e-2)
+        self.model_optimizer = optim.AdamW(self.parameters_to_train, self.opt.learning_rate, weight_decay=weight_decay)
+        
+        # 改进的学习率调度器：使用更平滑的衰减策略
+        # 方案1: 改进的StepLR（减小gamma，避免突然下降）
+        # 方案2: 使用CosineAnnealingLR（更平滑的衰减）
+        if getattr(self.opt, 'use_cosine_scheduler', False):
+            # 使用CosineAnnealingLR，更平滑的衰减
+            T_max = self.opt.num_epochs * self.num_total_steps // len(self.train_loader)
+            self.model_lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(
+                self.model_optimizer, T_max=T_max, eta_min=1e-6)
+        else:
+            # 改进的StepLR：增大step_size，减小gamma，避免突然下降
+            step_size = max(self.opt.scheduler_step_size, 30)  # 至少30个epoch
+            gamma = getattr(self.opt, 'scheduler_gamma', 0.5)  # 默认0.5而不是0.1
+            self.model_lr_scheduler = optim.lr_scheduler.StepLR(
+                self.model_optimizer, step_size, gamma)
         if self.opt.load_weights_folder is not None:
             self.load_model()
 
@@ -275,6 +315,10 @@ class Trainer:
         print(f"  扩散DDIM损失权重: {self.opt.diffusion_ddim_weight}")
         print(f"  扩散推理步数: {self.opt.diffusion_steps}")
         print(f"  扩散训练时间步: {self.opt.diffusion_timesteps}")
+        print(f"  Mask训练: {'启用' if getattr(self.opt, 'use_mask_training', False) else '禁用'}")
+        if getattr(self.opt, 'use_mask_training', False):
+            print(f"  Mask概率: {getattr(self.opt, 'mask_probability', 0.2)}")
+            print(f"  Mask损失权重: {getattr(self.opt, 'mask_loss_weight', 0.1)}")
         
         # 训练配置
         print("\n【训练配置】")
@@ -318,8 +362,13 @@ class Trainer:
         print(f"  使用设备: {self.device}")
         if not self.opt.no_cuda and torch.cuda.is_available():
             print(f"  CUDA设备数量: {torch.cuda.device_count()}")
-            print(f"  当前CUDA设备: {torch.cuda.current_device()}")
-            print(f"  CUDA设备名称: {torch.cuda.get_device_name(0)}")
+            if hasattr(self.device, 'index') and self.device.index is not None:
+                print(f"  指定GPU ID: {self.device.index}")
+                print(f"  当前CUDA设备: {torch.cuda.current_device()}")
+                print(f"  CUDA设备名称: {torch.cuda.get_device_name(self.device.index)}")
+            else:
+                print(f"  当前CUDA设备: {torch.cuda.current_device()}")
+                print(f"  CUDA设备名称: {torch.cuda.get_device_name(0)}")
         
         # 数据集信息
         print("\n【数据集信息】")
@@ -381,7 +430,40 @@ class Trainer:
 
             self.model_optimizer.zero_grad()
             losses["loss"].backward()
+            
+            # 计算梯度范数（用于监控，在裁剪之前）
+            total_grad_norm = 0.0
+            param_count = 0
+            for p in self.parameters_to_train:
+                if p.grad is not None:
+                    param_norm = p.grad.data.norm(2)
+                    total_grad_norm += param_norm.item() ** 2
+                    param_count += 1
+            if param_count > 0:
+                total_grad_norm = total_grad_norm ** (1. / 2)
+                # 保存到losses中，用于后续记录
+                losses['grad_norm'] = torch.tensor(total_grad_norm).to(self.device)
+            
+            # 添加梯度裁剪，防止梯度爆炸（280000步崩溃的可能原因）
+            max_grad_norm = getattr(self.opt, 'max_grad_norm', 1.0)
+            torch.nn.utils.clip_grad_norm_(self.parameters_to_train, max_norm=max_grad_norm)
+            
             self.model_optimizer.step()
+            
+            # Mask训练（如果启用）
+            if getattr(self.opt, 'use_mask_training', False):
+                outputs_mask, losses_mask = self.process_batch_mask(inputs, outputs)
+                self.model_optimizer.zero_grad()
+                losses_mask.backward()
+                
+                # 梯度裁剪
+                max_grad_norm = getattr(self.opt, 'max_grad_norm', 1.0)
+                torch.nn.utils.clip_grad_norm_(self.parameters_to_train, max_norm=max_grad_norm)
+                
+                self.model_optimizer.step()
+            else:
+                outputs_mask = None
+                losses_mask = None
 
             duration = time.time() - before_op_time
 
@@ -402,7 +484,11 @@ class Trainer:
                 if "depth_gt" in inputs:
                     self.compute_depth_losses(inputs, outputs, losses)
 
-                self.log("train", inputs, outputs, losses)
+                # 记录mask损失（如果启用）
+                if getattr(self.opt, 'use_mask_training', False) and losses_mask is not None:
+                    losses['mask_loss'] = losses_mask
+                
+                self.log("train", inputs, outputs, losses, outputs_mask)
             self.step += 1
 
         self.model_lr_scheduler.step()
@@ -469,12 +555,74 @@ class Trainer:
         losses['photometric'] = losses["loss"].clone()
         
         # 总损失 = 光度损失 + L1损失 + DDIM损失
-        losses["loss"] = (1.0 * losses['photometric'] + 
+        # 注意：增加L1权重有助于学生模型更好跟随教师模型
+        photometric_weight = getattr(self.opt, 'photometric_weight', 1.0)
+        losses["loss"] = (photometric_weight * losses['photometric'] + 
                          self.opt.diffusion_l1_weight * losses['l1'] + 
                          self.opt.diffusion_ddim_weight * losses['ddim'])
+        
+        # 记录各损失项的独立值，方便分析
+        losses['loss_photometric'] = losses['photometric']
+        losses['loss_l1'] = losses['l1']
+        losses['loss_ddim'] = losses['ddim']
 
         return outputs, losses
 
+    def process_batch_mask(self, inputs, outputs):
+        """Mask训练：使用随机mask对特征进行遮挡，增强模型鲁棒性
+        
+        原理：
+        - 生成随机mask（部分特征被遮挡）
+        - 使用masked特征进行深度预测
+        - 损失：masked预测与完整预测的一致性
+        
+        优势：
+        - 增强泛化能力
+        - 处理遮挡情况
+        - 有助于细节保留（特征级别的mask不会直接破坏细节）
+        """
+        # 获取编码器特征
+        features = self.models["encoder"](inputs[("color_aug", 0, 0)])
+        
+        # 生成随机mask
+        # mask_probability: 被遮挡的概率（0.2 = 20%遮挡，80%保留）
+        mask_prob = getattr(self.opt, 'mask_probability', 0.2)
+        b, c, h, w = features[0].shape
+        mask_initial = (torch.rand(b, 1, h, w).to(self.device) > mask_prob).float()
+        
+        # 应用mask到特征（只mask第一个特征，其他特征通过插值）
+        masked_features = []
+        for i, feat in enumerate(features):
+            if i == 0:
+                masked_feat = feat * mask_initial
+            else:
+                # 将mask插值到对应尺寸
+                mask_resized = F.interpolate(mask_initial, size=feat.shape[-2:], mode='nearest')
+                masked_feat = feat * mask_resized
+            masked_features.append(masked_feat)
+        
+        # 准备GT（使用完整预测作为伪GT）
+        gt_for_diffusion = {}
+        for scale in self.opt.scales:
+            gt_for_diffusion[("disp_diffusion", scale)] = outputs[("disp", scale)].detach()
+        
+        # 使用masked特征进行预测
+        outputs_mask = self.models["depth"](masked_features, gt_for_diffusion)
+        
+        # 计算mask损失：masked预测与完整预测的一致性
+        mask_loss = 0
+        mask_loss_weight = getattr(self.opt, 'mask_loss_weight', 0.1)
+        for scale in self.opt.scales:
+            mask_loss += mask_loss_weight * F.l1_loss(
+                outputs_mask[("disp", scale)],
+                outputs[("disp", scale)].detach()
+            )
+        mask_loss /= len(self.opt.scales)
+        
+        # 保存mask信息用于可视化
+        outputs_mask[("mask", 0)] = mask_initial
+        
+        return outputs_mask, mask_loss
 
     def predict_poses_ori(self, inputs):
         """预测原始输入帧之间的pose（第一次pose预测）
@@ -1126,7 +1274,7 @@ class Trainer:
         print(print_string.format(self.epoch, batch_idx, samples_per_sec, loss,
                                   sec_to_hm_str(time_sofar), sec_to_hm_str(training_time_left)))
 
-    def log(self, mode, inputs, outputs, losses):
+    def log(self, mode, inputs, outputs, losses, outputs_mask=None):
         """Write an event to the tensorboard events file
         """
         if self.debug_no_save or mode not in self.writers:
@@ -1134,6 +1282,29 @@ class Trainer:
         writer = self.writers[mode]
         for l, v in losses.items():
             writer.add_scalar("{}".format(l), v, self.step)
+        
+        # 添加学习率监控（重要：用于诊断280000步崩溃问题）
+        current_lr = self.model_optimizer.param_groups[0]['lr']
+        writer.add_scalar("learning_rate", current_lr, self.step)
+        
+        # 添加梯度范数监控（用于检测梯度爆炸）
+        if 'grad_norm' in losses:
+            writer.add_scalar("grad_norm", losses['grad_norm'].item(), self.step)
+        
+        # 记录mask训练的可视化（如果启用）
+        if outputs_mask is not None and ("mask", 0) in outputs_mask:
+            for j in range(min(4, self.opt.batch_size)):
+                writer.add_image(
+                    "mask_training/mask_{}".format(j),
+                    outputs_mask[("mask", 0)][j].data,
+                    self.step
+                )
+                for s in self.opt.scales:
+                    writer.add_image(
+                        "mask_training/disp_masked_{}/{}".format(s, j),
+                        normalize_image(outputs_mask[("disp", s)][j]),
+                        self.step
+                    )
 
         for j in range(min(12, self.opt.batch_size)):  # write a maxmimum of four images
 
