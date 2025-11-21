@@ -16,7 +16,9 @@ class MonodepthOptions:
     def __init__(self):
         self.parser = argparse.ArgumentParser(description="Unsupervised Indoor Depth-Pose Learning options")
 
-        # PATHS
+        # ====================================================================
+        # PATHS (路径配置)
+        # ====================================================================
         self.parser.add_argument("--data_path",
                                  type=str,
                                  help="path to the training data",
@@ -26,23 +28,16 @@ class MonodepthOptions:
                                  help="log directory",
                                  default="/oldisk/home/jingyang/monoldp/temp")
 
-        # TRAINING options
-        self.parser.add_argument("--model_name",
-                                 type=str,
-                                 help="the name of the folder to save the model in",
-                                 default="monoldp_diffusion_model")
-        self.parser.add_argument("--split",
-                                 type=str,
-                                 help="which training split to use",
-                                 default="nyu")
-        self.parser.add_argument("--num_layers",
-                                 type=int,
-                                 help="number of resnet layers",
-                                 default=18,
-                                 choices=[18, 34, 50, 101, 152])
+        # ====================================================================
+        # DATASET & DATA CONFIGURATION (数据集和数据配置)
+        # ====================================================================
         self.parser.add_argument("--dataset",
                                  type=str,
                                  help="dataset to train on",
+                                 default="nyu")
+        self.parser.add_argument("--split",
+                                 type=str,
+                                 help="which training split to use",
                                  default="nyu")
         self.parser.add_argument("--height",
                                  type=int,
@@ -71,43 +66,18 @@ class MonodepthOptions:
                                  help="frames to load",
                                  default=[0, -2, 2])
 
-        # OPTIMIZATION options
-        self.parser.add_argument("--batch_size",
+        # ====================================================================
+        # MODEL ARCHITECTURE (模型架构配置)
+        # ====================================================================
+        self.parser.add_argument("--model_name",
+                                 type=str,
+                                 help="the name of the folder to save the model in",
+                                 default="monoldp_diffusion_model")
+        self.parser.add_argument("--num_layers",
                                  type=int,
-                                 help="batch size",
-                                 default=8)
-        self.parser.add_argument("--learning_rate",
-                                 type=float,
-                                 help="learning rate",
-                                 default=1e-4)
-        self.parser.add_argument("--num_epochs",
-                                 type=int,
-                                 help="number of epochs",
-                                 default=20)
-        self.parser.add_argument("--scheduler_step_size",
-                                 type=int,
-                                 help="step size of the scheduler",
-                                 default=30)  # 从20增加到30，避免学习率下降过快
-        self.parser.add_argument("--scheduler_gamma",
-                                 type=float,
-                                 help="gamma (decay factor) of the scheduler",
-                                 default=0.5)  # 从0.1改为0.5，更平滑的衰减
-        self.parser.add_argument("--use_cosine_scheduler",
-                                 help="use cosine annealing scheduler instead of step scheduler",
-                                 action="store_true")
-        self.parser.add_argument("--weight_decay",
-                                 type=float,
-                                 help="weight decay for AdamW optimizer",
-                                 default=1e-2)
-        self.parser.add_argument("--max_grad_norm",
-                                 type=float,
-                                 help="maximum gradient norm for clipping",
-                                 default=1.0)
-
-        # conventional options
-        self.parser.add_argument("--no_ssim",
-                                 help="if set, disables ssim in the loss",
-                                 action="store_true")
+                                 help="number of resnet layers",
+                                 default=18,
+                                 choices=[18, 34, 50, 101, 152])
         self.parser.add_argument("--weights_init",
                                  type=str,
                                  help="pretrained or scratch",
@@ -120,70 +90,229 @@ class MonodepthOptions:
                                  choices=["pairs", "all"])
 
         # ====================================================================
-        # LOSS WEIGHTS (可配置的损失权重，便于调参和消融实验)
+        # MODEL ABLATION OPTIONS (模型消融选项)
+        # ====================================================================
+        self.parser.add_argument("--disable_pixel_coordinate_modulation",
+                                 help="if set, do not use pixel coordinate modulation,"
+                                      "and apply a ReLU to the obtained disparity",
+                                 action="store_true")
+
+        # ====================================================================
+        # TRAINING CONFIGURATION (训练配置)
+        # ====================================================================
+        self.parser.add_argument("--batch_size",
+                                 type=int,
+                                 help="batch size",
+                                 default=6)
+        self.parser.add_argument("--num_epochs",
+                                 type=int,
+                                 help="number of epochs",
+                                 default=20)
+
+        # ====================================================================
+        # OPTIMIZATION & SCHEDULER (优化器和调度器配置)
+        # ====================================================================
+        self.parser.add_argument("--learning_rate",
+                                 type=float,
+                                 help="learning rate",
+                                 default=1e-4)
+        self.parser.add_argument("--weight_decay",
+                                 type=float,
+                                 help="weight decay for AdamW optimizer",
+                                 default=1e-2)
+        self.parser.add_argument("--scheduler_step_size",
+                                 type=int,
+                                 help="step size of the scheduler",
+                                 default=30)  # 从20增加到30，避免学习率下降过快
+        self.parser.add_argument("--scheduler_gamma",
+                                 type=float,
+                                 help="gamma (decay factor) of the scheduler",
+                                 default=0.5)  # 从0.1改为0.5，更平滑的衰减
+        self.parser.add_argument("--use_cosine_scheduler",
+                                 help="use cosine annealing scheduler instead of step scheduler",
+                                 action="store_true")
+        self.parser.add_argument("--max_grad_norm",
+                                 type=float,
+                                 help="maximum gradient norm for clipping",
+                                 default=1.0)
+
+        # ====================================================================
+        # LOSS FUNCTION CONFIGURATION (损失函数配置)
+        # ====================================================================
+        # 所有损失函数默认都启用，可以通过--use_xxx或--disable_xxx控制
+        # 权重可以通过--xxx_weight调整
+        
+        # ====================================================================
+        # PHOTOMETRIC LOSS (光度损失/重投影损失)
+        # ====================================================================
+        # 作用：重投影误差，确保深度预测与图像一致
+        # 影响：✅ 有利于细节对齐，但可能会干扰学生模型跟随教师
+        # 建议：如果想让学生模型更专注于跟随教师，可以降低权重（0.1-0.5）
+        # 注意：Photometric Loss包含三个子损失：
+        #   - reprojection_losses_ori: 原始重投影损失（权重可配置）
+        #   - reprojection_losses_vitual: 虚拟重投影损失（权重可配置）
+        #   - reprojection_losses_new: 新重投影损失（权重可配置）
+        
+        self.parser.add_argument("--use_photometric_loss",
+                                help="enable photometric reprojection loss (default: True)",
+                                action="store_true",
+                                default=True)
+        self.parser.add_argument("--photometric_weight",
+                                type=float,
+                                default=0.2,
+                                help="overall weight for photometric reprojection loss. "
+                                     "Lower (0.1-0.5) to focus more on teacher alignment, "
+                                     "Higher (0.5-1.5) to balance geometry consistency")
+        
+        # Reprojection loss component weights (重投影损失组件权重)
+        # 作用：控制三个重投影损失之间的相对权重
+        # 默认：ori=0.25, virtual=1.0, new=1.0
+        
+        self.parser.add_argument("--reprojection_ori_weight",
+                                type=float,
+                                default=0.25,
+                                help="weight for original reprojection loss (reprojection_losses_ori). "
+                                     "Default: 0.25")
+        self.parser.add_argument("--reprojection_virtual_weight",
+                                type=float,
+                                default=1.0,
+                                help="weight for virtual reprojection loss (reprojection_losses_vitual). "
+                                     "Default: 1.0")
+        self.parser.add_argument("--reprojection_new_weight",
+                                type=float,
+                                default=1.0,
+                                help="weight for new reprojection loss (reprojection_losses_new). "
+                                     "Default: 1.0")
+        
+        # Reprojection SSIM and L1 Loss (重投影SSIM和L1损失)
+        # 作用：在reprojection loss中混合使用SSIM和L1损失
+        # 注意：这是重投影损失内部的混合权重，与Teacher-Student L1损失不同
+        #   - Reprojection L1: 重投影图像与原图像的L1距离（几何一致性）
+        #   - Teacher-Student L1: 学生预测与教师预测的L1距离（知识蒸馏）
+        # 影响：⚠️ SSIM在低对比度区域可能不够敏感，可能丢失细节
+        # 建议：可以调整权重比例，或通过--no-use_reprojection_ssim禁用SSIM，仅使用L1
+        
+        self.parser.add_argument("--use_reprojection_ssim",
+                                help="enable SSIM in reprojection loss (default: True). "
+                                     "When enabled, uses reprojection_ssim_weight*SSIM + reprojection_l1_weight*L1. "
+                                     "When disabled, uses L1 only",
+                                action="store_true",
+                                default=True)
+        self.parser.add_argument("--reprojection_ssim_weight",
+                                type=float,
+                                default=0.85,
+                                help="weight for SSIM in reprojection loss. "
+                                     "Used together with reprojection_l1_weight. "
+                                     "Default: 0.85. Note: weights don't need to sum to 1.0")
+        self.parser.add_argument("--reprojection_l1_weight",
+                                type=float,
+                                default=0.15,
+                                help="weight for L1 in reprojection loss (reprojection image vs original image). "
+                                     "This is DIFFERENT from teacher-student L1 loss. "
+                                     "Used together with reprojection_ssim_weight. "
+                                     "Default: 0.15. Note: weights don't need to sum to 1.0")
+        
+        # ====================================================================
+        # GEOMETRIC REGULARIZATION LOSSES (几何正则化损失)
         # ====================================================================
         
         # Smoothness Loss (平滑损失)
         # 作用：惩罚相邻像素的深度不连续性，使用边缘感知权重
         # 影响：⚠️ 最不利于细节保留，会平滑掉小尺度细节
-        # 建议：凸显细节时使用 0.05-0.1，平衡时使用 0.1-0.2
-        self.parser.add_argument("--smoothness_weight",
-                                 type=float,
-                                 help="smoothness loss weight (⚠️ high value smooths details)",
-                                 default=0.02)  # 从0.2降低到0.05，更有利于细节
+        # 建议：凸显细节时使用低权重(0.01-0.05)或禁用
         
-        # Plane Regularization (平面正则化)
+        self.parser.add_argument("--use_smoothness_loss",
+                                help="enable edge-aware smoothness loss (default: True)",
+                                action="store_true",
+                                default=True)
+        self.parser.add_argument("--smoothness_weight",
+                                type=float,
+                                default=0.01,
+                                help="weight for smoothness loss (⚠️ high value smooths details). "
+                                     "Recommended: 0.01-0.05 for detail preservation, 0.1-0.2 for balance")
+        
+        # Smoothness computation mode (not a loss switch, but a computation mode)
+        self.parser.add_argument("--disable_plane_smoothness",
+                                help="use edge-aware smoothness on disparity instead of plane coefficients",
+                                action="store_true")
+        
+        # Plane Regularization Loss (平面正则化损失)
         # 作用：强制4个点共面，假设场景中存在平面结构
         # 影响：⚠️ 不利于细节保留，可能错误地平滑小物体和纹理
-        # 建议：凸显细节时使用 0.5-1.0，或禁用
-        self.parser.add_argument("--num_plane_keysets",
-                                 type=int,
-                                 help="the number of keysets for plane regularization",
-                                 default=512)
-        self.parser.add_argument("--plane_weight",
-                                 type=float,
-                                 help="plane regularization weight (⚠️ high value may smooth details)",
-                                 default=0.5)  # 从2.0降低到0.5，更有利于细节
+        # 建议：凸显细节时使用低权重(0.1-0.5)或禁用
         
-        # Line Regularization (线段正则化)
+        self.parser.add_argument("--use_plane_regularization",
+                                help="enable plane regularization loss (default: True)",
+                                action="store_true",
+                                default=True)
+        self.parser.add_argument("--num_plane_keysets",
+                                type=int,
+                                default=512,
+                                help="number of keysets for plane regularization")
+        self.parser.add_argument("--plane_weight",
+                                type=float,
+                                default=0.1,
+                                help="weight for plane regularization loss (⚠️ high value may smooth details). "
+                                     "Recommended: 0.1-0.5 for detail preservation")
+        
+        # Line Regularization Loss (线段正则化损失)
         # 作用：强制3个点共线，假设场景中存在直线结构
         # 影响：⚠️ 中等程度不利于细节保留
-        # 建议：凸显细节时使用 0.1-0.2，或禁用
+        # 建议：凸显细节时使用低权重(0.1-0.2)或禁用
+        
+        self.parser.add_argument("--use_line_regularization",
+                                help="enable line regularization loss (default: True)",
+                                action="store_true",
+                                default=True)
         self.parser.add_argument("--num_line_keysets",
-                                 type=int,
-                                 help="the number of keysets for line regularization",
-                                 default=128)
+                                type=int,
+                                default=128,
+                                help="number of keysets for line regularization")
         self.parser.add_argument("--line_weight",
-                                 type=float,
-                                 help="line regularization weight (⚠️ may smooth details)",
-                                 default=0.1)  # 从0.5降低到0.1，更有利于细节
+                                type=float,
+                                default=0.1,
+                                help="weight for line regularization loss (⚠️ may smooth details). "
+                                     "Recommended: 0.1-0.2 for detail preservation")
         
-        # Photometric Loss (光度损失)
-        # 作用：重投影误差，确保深度预测与图像一致
-        # 影响：✅ 有利于细节对齐，但可能会干扰学生模型跟随教师
-        # 注意：如果想让学生模型更专注于跟随教师，可以降低此权重（0.5-1.0）
-        #       如果希望平衡几何一致性和教师对齐，保持1.0-1.5
-        self.parser.add_argument("--photometric_weight",
-                                 type=float,
-                                 help="photometric reprojection loss weight. "
-                                      "Lower (0.5-1.0) to focus more on teacher alignment, "
-                                      "Higher (1.0-1.5) to balance geometry consistency",
-                                 default=0.5)  # 从1.5降低到0.5，减少几何约束的干扰
-        
-        # SSIM Loss (结构相似性损失)
-        # 作用：在reprojection loss中与L1混合使用
-        # 影响：⚠️ 在低对比度区域可能不够敏感，可能丢失细节
-        # 建议：可以禁用(--no_ssim)仅使用L1，或降低SSIM权重
-        # 注意：当前实现中SSIM权重固定为0.85，L1为0.15
-
         # ====================================================================
-        # DIFFUSION OPTIONS (扩散模型配置)
+        # DIFFUSION MODEL CONFIGURATION (扩散模型配置)
         # ====================================================================
         # Note: Diffusion decoder is always used, this flag is kept for backward compatibility
+        
         self.parser.add_argument("--use_diffusion",
                                 help="[DEPRECATED] Diffusion is always enabled",
                                 action="store_true",
                                 default=True)
+        
+        # DDIM Loss (Denoising Diffusion Implicit Model Loss)
+        # 作用：扩散模型的去噪损失，训练噪声预测网络
+        # 影响：✅ 有利于细节生成（扩散模型本身设计用于生成细节）
+        # 建议：通常0.5-2.0，如果想更专注于跟随教师，可以降低权重
+        
+        self.parser.add_argument("--use_ddim_loss",
+                                help="enable DDIM diffusion loss (denoising loss) (default: True)",
+                                action="store_true",
+                                default=True)
+        self.parser.add_argument("--diffusion_ddim_weight",
+                                type=float,
+                                default=1.0,
+                                help="weight for DDIM diffusion loss (denoising loss). "
+                                     "✅ Helps preserve details. "
+                                     "Recommended: 0.5-2.0. Lower if focusing more on teacher alignment")
+        
+        # Diffusion Training Parameters (扩散训练参数)
+        # Diffusion Training Timesteps (扩散训练时间步数)
+        # 含义：训练时扩散调度器的总时间步数
+        # 作用：定义噪声调度，更多步数提供更细粒度的噪声级别
+        # 格式：[scale_2, scale_1, scale_0]
+        # 建议：通常保持默认值，除非需要特殊调整
+        
+        self.parser.add_argument("--diffusion_timesteps",
+                                nargs="+",
+                                type=int,
+                                default=[500, 400, 300],
+                                help="number of training timesteps for each scale [coarse to fine]. "
+                                     "Defines noise schedule. Format: [scale_2, scale_1, scale_0]")
         
         # Diffusion Inference Steps (扩散推理步数)
         # 含义：DDIM采样时的去噪步数，从粗到细的尺度对应不同的步数
@@ -195,102 +324,21 @@ class MonodepthOptions:
         #   - 基础：[5, 4, 3] (粗尺度5步，中尺度4步，细尺度3步)
         #   - 增强细节：[8, 6, 5] 或 [10, 8, 6]
         #   - 快速推理：[3, 2, 2]
+        
         self.parser.add_argument("--diffusion_steps",
                                 nargs="+",
                                 type=int,
-                                default=[8, 6, 5],  # 从[5,4,3]增加到[8,6,5]，增强细节
+                                default=[20, 15, 12],  # 从[5,4,3]增加到[8,6,5]，增强细节
                                 help="number of diffusion inference steps for each scale [coarse to fine]. "
                                      "More steps = better details but slower. "
                                      "Format: [scale_2, scale_1, scale_0] or [scale_0] for single scale")
         
-        # Diffusion Training Timesteps (扩散训练时间步数)
-        # 含义：训练时扩散调度器的总时间步数
-        # 作用：定义噪声调度，更多步数提供更细粒度的噪声级别
-        # 格式：[scale_2, scale_1, scale_0]
-        # 建议：通常保持默认值，除非需要特殊调整
-        self.parser.add_argument("--diffusion_timesteps",
-                                nargs="+",
-                                type=int,
-                                default=[250, 200, 150],
-                                help="number of training timesteps for each scale [coarse to fine]. "
-                                     "Defines noise schedule. Format: [scale_2, scale_1, scale_0]")
-        
-        # Diffusion L1 Loss Weight (扩散L1损失权重)
-        # 作用：学生模型与教师模型预测的一致性损失
-        # 影响：✅ 有助于学生模型学习教师的知识
-        # 注意：如果教师模型本身不够细节，高权重可能让学生也丢失细节
-        # 建议：通常1.0-10.0，如果想让学生模型尽可能逼近教师，可以设置5.0-10.0
-        self.parser.add_argument("--diffusion_l1_weight",
-                                type=float,
-                                default=5.0,  # 从3.0增加到5.0，更强调学生跟随教师
-                                help="weight for L1 loss between teacher and student predictions. "
-                                     "Higher = stronger teacher-student alignment. "
-                                     "For maximum alignment, use 5.0-10.0")
-        
-        # Teacher-Student MSE Loss (学生-教师MSE损失)
-        # 作用：MSE损失对大误差更敏感，有助于快速收敛
-        # 影响：✅ 有助于学生模型快速逼近教师模型
-        # 建议：如果使用，权重通常设置为0.5-2.0
-        self.parser.add_argument("--use_teacher_student_mse",
-                                help="enable MSE loss between teacher and student predictions",
-                                action="store_true",
-                                default=False)
-        self.parser.add_argument("--teacher_student_mse_weight",
-                                type=float,
-                                default=1.0,
-                                help="weight for MSE loss between teacher and student predictions. "
-                                     "Used together with L1 loss for stronger alignment")
-        
-        # Teacher-Student SSIM Loss (学生-教师SSIM损失)
-        # 作用：SSIM损失关注结构相似性，有助于整体结构对齐
-        # 影响：✅ 有助于学生模型在结构上与教师对齐
-        # 建议：如果使用，权重通常设置为0.5-2.0
-        self.parser.add_argument("--use_teacher_student_ssim",
-                                help="enable SSIM loss between teacher and student predictions",
-                                action="store_true",
-                                default=False)
-        self.parser.add_argument("--teacher_student_ssim_weight",
-                                type=float,
-                                default=1.0,
-                                help="weight for SSIM loss between teacher and student predictions. "
-                                     "Helps align structural similarity")
-        
-        # Diffusion DDIM Loss Weight (扩散DDIM损失权重)
-        # 作用：扩散模型的去噪损失，训练噪声预测网络
-        # 影响：✅ 有利于细节生成（扩散模型本身设计用于生成细节）
-        # 建议：通常0.5-2.0，如果想更专注于跟随教师，可以降低权重
-        self.parser.add_argument("--diffusion_ddim_weight",
-                                type=float,
-                                default=1.0,  # 从2.0降低到1.0，减少扩散损失的干扰
-                                help="weight for DDIM diffusion loss (denoising loss). "
-                                     "✅ Helps preserve details. "
-                                     "Lower if you want to focus more on teacher alignment")
-        
         # ====================================================================
-        # MASK TRAINING OPTIONS (Mask训练配置)
+        # TEACHER MODEL CONFIGURATION (教师模型配置)
         # ====================================================================
-        # Mask训练：使用随机mask对特征进行遮挡，增强模型鲁棒性
-        # 原理：类似dropout，但作用于特征空间，强制模型从部分信息恢复深度
-        # 优势：增强泛化能力，处理遮挡情况，有助于细节保留
-        
-        self.parser.add_argument("--use_mask_training",
-                                help="enable mask training (feature-level masking for robustness)",
-                                action="store_true",
-                                default=False)
-        
-        self.parser.add_argument("--mask_probability",
-                                type=float,
-                                default=0.2,
-                                help="probability of masking a feature location (0.2 = 20%% masked, 80%% kept)",
-                                choices=[0.0, 0.1, 0.2, 0.3, 0.4, 0.5])
-        
-        self.parser.add_argument("--mask_loss_weight",
-                                type=float,
-                                default=0.1,
-                                help="weight for mask training loss (consistency between masked and full predictions)")
-        
-        # DEPTH ANYTHING V3 teacher options (always enabled)
         # Note: Depth Anything V3 is always used as teacher model
+        
+        # Teacher Model Settings (教师模型设置)
         self.parser.add_argument("--use_depth_anything_v3",
                                 help="[DEPRECATED] Depth Anything V3 is always used as teacher",
                                 action="store_true",
@@ -304,26 +352,85 @@ class MonodepthOptions:
                                 type=str,
                                 help="path to Depth Anything V3 model directory (optional, will auto-download from HuggingFace if not provided)",
                                 default=None)
-
-        # ABLATION options-PLNet
-        self.parser.add_argument("--disable_pixel_coordinate_modulation",
-                                 help="if set, do not use pixel coordinate modulation,"
-                                      "and apply a ReLU to the obtained disparity",
-                                 action="store_true")
-        self.parser.add_argument("--disable_plane_smoothness",
-                                 help="if set, the image-edge-aware smoothness will be applied on the "
-                                      "conventional disparity instead of the proposed planar coefficients",
-                                 action="store_true")
-        self.parser.add_argument("--disable_plane_regularization",
-                                 help="if set, do not use plane regularization",
-                                 action="store_true")
-        self.parser.add_argument("--disable_line_regularization",
-                                 help="if set, do not use line regularization",
-                                 action="store_true")
-
-        # SYSTEM options
+        
+        # Teacher-Student Alignment Losses (学生-教师对齐损失)
+        # 用于知识蒸馏，使学生模型输出逼近教师模型
+        
+        # Teacher-Student L1 Loss (Mean Absolute Error Loss)
+        # 作用：学生模型与教师模型预测的一致性损失（基础对齐损失）
+        # 注意：这是知识蒸馏损失，计算学生预测与教师预测的L1距离
+        #   与重投影L1损失不同（重投影L1计算重投影图像与原图像的L1距离）
+        # 影响：✅ 有助于学生模型学习教师的知识
+        # 建议：通常1.0-10.0，如果想让学生模型尽可能逼近教师，可以设置5.0-10.0
+        
+        self.parser.add_argument("--use_teacher_student_l1",
+                                help="enable L1 loss between teacher and student predictions (default: True)",
+                                action="store_true",
+                                default=True)
+        self.parser.add_argument("--teacher_student_l1_weight",
+                                type=float,
+                                default=5.0,
+                                help="weight for L1 loss between teacher and student predictions. "
+                                     "This is DIFFERENT from reprojection L1 loss. "
+                                     "Higher = stronger teacher-student alignment. "
+                                     "Recommended: 5.0-10.0 for maximum alignment")
+        
+        # MSE Loss (Mean Squared Error Loss)
+        # 作用：MSE损失对大误差更敏感，有助于快速收敛
+        # 影响：✅ 有助于学生模型快速逼近教师模型
+        # 建议：权重通常设置为0.5-2.0
+        
+        self.parser.add_argument("--use_teacher_student_mse",
+                                help="enable MSE loss between teacher and student predictions (default: True)",
+                                action="store_true",
+                                default=True)
+        self.parser.add_argument("--teacher_student_mse_weight",
+                                type=float,
+                                default=1.0,
+                                help="weight for MSE loss between teacher and student predictions. "
+                                     "Recommended: 0.5-2.0. Used together with L1 loss for stronger alignment")
+        
+        # SSIM Loss (Structural Similarity Index Measure Loss)
+        # 作用：SSIM损失关注结构相似性，有助于整体结构对齐
+        # 影响：✅ 有助于学生模型在结构上与教师对齐
+        # 建议：权重通常设置为0.5-2.0
+        
+        self.parser.add_argument("--use_teacher_student_ssim",
+                                help="enable SSIM loss between teacher and student predictions (default: True)",
+                                action="store_true",
+                                default=True)
+        self.parser.add_argument("--teacher_student_ssim_weight",
+                                type=float,
+                                default=1.0,
+                                help="weight for SSIM loss between teacher and student predictions. "
+                                     "Recommended: 0.5-2.0. Helps align structural similarity")
+        
         # ====================================================================
-        # GPU/DEVICE OPTIONS (GPU设备配置)
+        # MASK TRAINING LOSS (Mask训练损失)
+        # ====================================================================
+        # Mask训练：使用随机mask对特征进行遮挡，增强模型鲁棒性
+        # 原理：类似dropout，但作用于特征空间，强制模型从部分信息恢复深度
+        # 优势：增强泛化能力，处理遮挡情况，有助于细节保留
+        
+        self.parser.add_argument("--use_mask_training",
+                                help="enable mask training loss (feature-level masking for robustness) (default: True)",
+                                action="store_true",
+                                default=True)
+        
+        self.parser.add_argument("--mask_probability",
+                                type=float,
+                                default=0.2,
+                                help="probability of masking a feature location (0.2 = 20%% masked, 80%% kept). "
+                                     "Options: 0.0, 0.1, 0.2, 0.3, 0.4, 0.5")
+        
+        self.parser.add_argument("--mask_loss_weight",
+                                type=float,
+                                default=0.1,
+                                help="weight for mask training loss (consistency between masked and full predictions). "
+                                     "Recommended: 0.1-0.2")
+
+        # ====================================================================
+        # SYSTEM & DEVICE OPTIONS (系统和设备配置)
         # ====================================================================
         self.parser.add_argument("--no_cuda",
                                  help="if set disables CUDA (use CPU)",
@@ -345,7 +452,9 @@ class MonodepthOptions:
                                  help="number of dataloader workers",
                                  default=12)
 
-        # LOADING options
+        # ====================================================================
+        # MODEL LOADING OPTIONS (模型加载配置)
+        # ====================================================================
         self.parser.add_argument("--load_weights_folder",
                                  type=str,
                                  help="name of model to load")
@@ -355,7 +464,9 @@ class MonodepthOptions:
                                  help="models to load",
                                  default=["encoder", "depth", "pose_encoder", "pose", "scalenet", "regression"])
 
-        # LOGGING options
+        # ====================================================================
+        # LOGGING & DEBUGGING OPTIONS (日志和调试配置)
+        # ====================================================================
         self.parser.add_argument("--log_frequency",
                                  type=int,
                                  help="number of batches between each tensorboard log",
@@ -373,7 +484,9 @@ class MonodepthOptions:
                                  action="store_true",
                                  default=True)
 
-        # EVALUATION options
+        # ====================================================================
+        # EVALUATION OPTIONS (评估配置)
+        # ====================================================================
         self.parser.add_argument("--disable_median_scaling",
                                  help="if set disables median scaling in evaluation",
                                  action="store_true")

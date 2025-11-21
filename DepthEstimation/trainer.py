@@ -218,12 +218,15 @@ class Trainer:
         num_train_samples = len(train_filenames)
         self.num_total_steps = num_train_samples // self.opt.batch_size * self.opt.num_epochs
 
+        use_plane_reg = getattr(self.opt, 'use_plane_regularization', True)
+        use_line_reg = getattr(self.opt, 'use_line_regularization', True)
+        
         train_dataset = self.dataset(
             self.opt.data_path, train_filenames, self.opt.height, self.opt.width,
             self.opt.frame_ids, self.num_scales, is_train=True, img_ext=img_ext,
-            return_plane=not self.opt.disable_plane_regularization,
+            return_plane=use_plane_reg,
             num_plane_keysets = self.opt.num_plane_keysets,
-            return_line=not self.opt.disable_line_regularization,
+            return_line=use_line_reg,
             num_line_keysets = self.opt.num_line_keysets)
 
         self.train_loader = DataLoader(
@@ -233,9 +236,9 @@ class Trainer:
         val_dataset = self.dataset(
             self.opt.data_path, val_filenames, self.opt.height, self.opt.width,
             self.opt.frame_ids, self.num_scales, is_train=False, img_ext=img_ext,
-            return_plane=not self.opt.disable_plane_regularization,
+            return_plane=use_plane_reg,
             num_plane_keysets = self.opt.num_plane_keysets,
-            return_line=not self.opt.disable_line_regularization,
+            return_line=use_line_reg,
             num_line_keysets = self.opt.num_line_keysets)
 
         self.val_loader = DataLoader(
@@ -248,7 +251,8 @@ class Trainer:
             for mode in ["train", "val"]:
                 self.writers[mode] = SummaryWriter(os.path.join(self.log_path, mode))
 
-        if not self.opt.no_ssim:
+        use_reprojection_ssim = getattr(self.opt, 'use_reprojection_ssim', True)
+        if use_reprojection_ssim:
             self.ssim = SSIM()
             self.ssim.to(self.device)
 
@@ -311,12 +315,12 @@ class Trainer:
         print(f"  Depth Anything V3模型: {self.opt.depth_anything_v3_model}")
         if self.opt.depth_anything_v3_weights:
             print(f"  DA3权重路径: {self.opt.depth_anything_v3_weights}")
-        print(f"  扩散L1损失权重: {self.opt.diffusion_l1_weight}")
+        print(f"  学生-教师L1损失权重: {self.opt.teacher_student_l1_weight}")
         print(f"  扩散DDIM损失权重: {self.opt.diffusion_ddim_weight}")
         print(f"  扩散推理步数: {self.opt.diffusion_steps}")
         print(f"  扩散训练时间步: {self.opt.diffusion_timesteps}")
-        print(f"  Mask训练: {'启用' if getattr(self.opt, 'use_mask_training', False) else '禁用'}")
-        if getattr(self.opt, 'use_mask_training', False):
+        print(f"  Mask训练: {'启用' if getattr(self.opt, 'use_mask_training', True) else '禁用'}")
+        if getattr(self.opt, 'use_mask_training', True):
             print(f"  Mask概率: {getattr(self.opt, 'mask_probability', 0.2)}")
             print(f"  Mask损失权重: {getattr(self.opt, 'mask_loss_weight', 0.1)}")
         
@@ -331,17 +335,37 @@ class Trainer:
         
         # 损失函数配置
         print("\n【损失函数配置】")
-        print(f"  平滑损失权重: {self.opt.smoothness_weight}")
-        print(f"  平面正则化权重: {self.opt.plane_weight}")
-        print(f"  线正则化权重: {self.opt.line_weight}")
-        print(f"  禁用SSIM: {self.opt.no_ssim}")
-        print(f"  禁用平面平滑: {self.opt.disable_plane_smoothness}")
-        print(f"  禁用平面正则化: {self.opt.disable_plane_regularization}")
-        print(f"  禁用线正则化: {self.opt.disable_line_regularization}")
-        if not self.opt.disable_plane_regularization:
-            print(f"  平面keysets数量: {self.opt.num_plane_keysets}")
-        if not self.opt.disable_line_regularization:
-            print(f"  线keysets数量: {self.opt.num_line_keysets}")
+        use_photometric = getattr(self.opt, 'use_photometric_loss', True)
+        use_reprojection_ssim = getattr(self.opt, 'use_reprojection_ssim', True)
+        use_smoothness = getattr(self.opt, 'use_smoothness_loss', True)
+        use_plane_reg = getattr(self.opt, 'use_plane_regularization', True)
+        use_line_reg = getattr(self.opt, 'use_line_regularization', True)
+        use_l1 = getattr(self.opt, 'use_teacher_student_l1', True)
+        use_mse = getattr(self.opt, 'use_teacher_student_mse', True)
+        use_ts_ssim = getattr(self.opt, 'use_teacher_student_ssim', True)
+        use_ddim = getattr(self.opt, 'use_ddim_loss', True)
+        use_mask = getattr(self.opt, 'use_mask_training', True)
+        
+        print(f"  Photometric Loss: {'启用' if use_photometric else '禁用'} (权重: {self.opt.photometric_weight})")
+        if use_photometric:
+            print(f"    重投影损失组件权重: ori={getattr(self.opt, 'reprojection_ori_weight', 0.25)}, "
+                  f"virtual={getattr(self.opt, 'reprojection_virtual_weight', 1.0)}, "
+                  f"new={getattr(self.opt, 'reprojection_new_weight', 1.0)}")
+        print(f"  Reprojection SSIM: {'启用' if use_reprojection_ssim else '禁用'}")
+        print(f"  Smoothness Loss: {'启用' if use_smoothness else '禁用'} (权重: {self.opt.smoothness_weight})")
+        print(f"  Plane Regularization: {'启用' if use_plane_reg else '禁用'} (权重: {self.opt.plane_weight})")
+        if use_plane_reg:
+            print(f"    平面keysets数量: {self.opt.num_plane_keysets}")
+        print(f"  Line Regularization: {'启用' if use_line_reg else '禁用'} (权重: {self.opt.line_weight})")
+        if use_line_reg:
+            print(f"    线keysets数量: {self.opt.num_line_keysets}")
+        print(f"  Teacher-Student L1: {'启用' if use_l1 else '禁用'} (权重: {self.opt.teacher_student_l1_weight})")
+        print(f"  Reprojection SSIM权重: {getattr(self.opt, 'reprojection_ssim_weight', 0.85)}")
+        print(f"  Reprojection L1权重: {getattr(self.opt, 'reprojection_l1_weight', 0.15)}")
+        print(f"  Teacher-Student MSE: {'启用' if use_mse else '禁用'} (权重: {getattr(self.opt, 'teacher_student_mse_weight', 1.0)})")
+        print(f"  Teacher-Student SSIM: {'启用' if use_ts_ssim else '禁用'} (权重: {getattr(self.opt, 'teacher_student_ssim_weight', 1.0)})")
+        print(f"  DDIM Loss: {'启用' if use_ddim else '禁用'} (权重: {self.opt.diffusion_ddim_weight})")
+        print(f"  Mask Training: {'启用' if use_mask else '禁用'} (权重: {getattr(self.opt, 'mask_loss_weight', 0.1)})")
         
         # 日志配置
         print("\n【日志配置】")
@@ -450,8 +474,9 @@ class Trainer:
             
             self.model_optimizer.step()
             
-            # Mask训练（如果启用）
-            if getattr(self.opt, 'use_mask_training', False):
+            # Mask训练（如果启用，默认True）
+            use_mask_training = getattr(self.opt, 'use_mask_training', True)
+            if use_mask_training:
                 outputs_mask, losses_mask = self.process_batch_mask(inputs, outputs)
                 self.model_optimizer.zero_grad()
                 losses_mask.backward()
@@ -485,7 +510,8 @@ class Trainer:
                     self.compute_depth_losses(inputs, outputs, losses)
 
                 # 记录mask损失（如果启用）
-                if getattr(self.opt, 'use_mask_training', False) and losses_mask is not None:
+                use_mask_training = getattr(self.opt, 'use_mask_training', True)
+                if use_mask_training and losses_mask is not None:
                     losses['mask_loss'] = losses_mask
                 
                 self.log("train", inputs, outputs, losses, outputs_mask)
@@ -537,16 +563,24 @@ class Trainer:
 
         losses = self.compute_losses(inputs, outputs)
         
-        # 扩散相关损失
-        # L1损失：学生与教师的一致性（基础对齐损失）
-        l1_loss = 0
-        for scale in self.opt.scales:
-            l1_loss += F.l1_loss(outputs[("predisp", scale)], outputs[("disp", scale)])
-        losses['l1'] = l1_loss / len(self.opt.scales)
+        # ====================================================================
+        # TEACHER-STUDENT ALIGNMENT LOSSES (学生-教师对齐损失)
+        # ====================================================================
+        
+        # Teacher-Student L1损失：学生与教师的一致性（基础对齐损失）
+        # 注意：这是知识蒸馏损失，与重投影L1损失不同
+        use_l1_loss = getattr(self.opt, 'use_teacher_student_l1', True)
+        teacher_student_l1_loss = 0
+        if use_l1_loss:
+            for scale in self.opt.scales:
+                teacher_student_l1_loss += F.l1_loss(outputs[("predisp", scale)], outputs[("disp", scale)])
+            losses['teacher_student_l1'] = teacher_student_l1_loss / len(self.opt.scales)
+        else:
+            losses['teacher_student_l1'] = torch.tensor(0.0).to(self.device)
         
         # MSE损失：学生与教师的一致性（更强调大误差，有助于快速收敛）
+        use_mse_loss = getattr(self.opt, 'use_teacher_student_mse', True)
         mse_loss = 0
-        use_mse_loss = getattr(self.opt, 'use_teacher_student_mse', False)
         if use_mse_loss:
             for scale in self.opt.scales:
                 mse_loss += F.mse_loss(outputs[("predisp", scale)], outputs[("disp", scale)])
@@ -555,8 +589,8 @@ class Trainer:
             losses['mse'] = torch.tensor(0.0).to(self.device)
         
         # SSIM损失：学生与教师的结构相似性（关注整体结构一致性）
+        use_ssim_loss = getattr(self.opt, 'use_teacher_student_ssim', True)
         ssim_loss = 0
-        use_ssim_loss = getattr(self.opt, 'use_teacher_student_ssim', False)
         if use_ssim_loss and hasattr(self, 'ssim'):
             for scale in self.opt.scales:
                 teacher_disp = outputs[("predisp", scale)]
@@ -568,30 +602,46 @@ class Trainer:
         else:
             losses['ssim_teacher_student'] = torch.tensor(0.0).to(self.device)
         
+        # ====================================================================
+        # DIFFUSION MODEL LOSSES (扩散模型损失)
+        # ====================================================================
+        
         # DDIM损失：扩散模型的去噪损失
+        use_ddim_loss = getattr(self.opt, 'use_ddim_loss', True)
         ddim_loss = 0
-        for scale in self.opt.scales:
-            if ("ddim_loss", scale) in outputs:
-                ddim_loss += outputs[("ddim_loss", scale)]
-        losses['ddim'] = ddim_loss / len(self.opt.scales) if ddim_loss != 0 else torch.tensor(0.0).to(self.device)
+        if use_ddim_loss:
+            for scale in self.opt.scales:
+                if ("ddim_loss", scale) in outputs:
+                    ddim_loss += outputs[("ddim_loss", scale)]
+            losses['ddim'] = ddim_loss / len(self.opt.scales) if ddim_loss != 0 else torch.tensor(0.0).to(self.device)
+        else:
+            losses['ddim'] = torch.tensor(0.0).to(self.device)
+        
+        # ====================================================================
+        # TOTAL LOSS COMPUTATION (总损失计算)
+        # ====================================================================
         
         # 保存原始光度损失
         losses['photometric'] = losses["loss"].clone()
         
         # 总损失 = 光度损失 + L1损失 + MSE损失 + SSIM损失 + DDIM损失
         # 注意：增加对齐损失权重有助于学生模型更好跟随教师模型
-        photometric_weight = getattr(self.opt, 'photometric_weight', 1.0)
-        mse_weight = getattr(self.opt, 'teacher_student_mse_weight', 0.0)
-        ssim_weight = getattr(self.opt, 'teacher_student_ssim_weight', 0.0)
+        use_photometric_loss = getattr(self.opt, 'use_photometric_loss', True)
+        photometric_weight = getattr(self.opt, 'photometric_weight', 0.2) if use_photometric_loss else 0.0
+        l1_weight = getattr(self.opt, 'teacher_student_l1_weight', 5.0) if use_l1_loss else 0.0
+        mse_weight = getattr(self.opt, 'teacher_student_mse_weight', 1.0) if use_mse_loss else 0.0
+        ssim_weight = getattr(self.opt, 'teacher_student_ssim_weight', 1.0) if use_ssim_loss else 0.0
+        ddim_weight = getattr(self.opt, 'diffusion_ddim_weight', 1.0) if use_ddim_loss else 0.0
+        
         losses["loss"] = (photometric_weight * losses['photometric'] + 
-                         self.opt.diffusion_l1_weight * losses['l1'] + 
+                         l1_weight * losses['teacher_student_l1'] + 
                          mse_weight * losses['mse'] +
                          ssim_weight * losses['ssim_teacher_student'] +
-                         self.opt.diffusion_ddim_weight * losses['ddim'])
+                         ddim_weight * losses['ddim'])
         
         # 记录各损失项的独立值，方便分析
         losses['loss_photometric'] = losses['photometric']
-        losses['loss_l1'] = losses['l1']
+        losses['loss_teacher_student_l1'] = losses['teacher_student_l1']
         losses['loss_mse'] = losses['mse']
         losses['loss_ssim_teacher_student'] = losses['ssim_teacher_student']
         losses['loss_ddim'] = losses['ddim']
@@ -892,10 +942,12 @@ class Trainer:
             losses_avg["loss/" + str(s)] = 0.0
             losses_sum["smooth_loss/" + str(s)] = 0.0
             losses_avg["smooth_loss/" + str(s)] = 0.0
-            if not self.opt.disable_plane_regularization:
+            use_plane_reg = getattr(self.opt, 'use_plane_regularization', True)
+            if use_plane_reg:
                 losses_sum["plane_loss/" + str(s)] = 0.0
                 losses_avg["plane_loss/" + str(s)] = 0.0
-            if not self.opt.disable_line_regularization:
+            use_line_reg = getattr(self.opt, 'use_line_regularization', True)
+            if use_line_reg:
                 losses_sum["line_loss/" + str(s)] = 0.0
                 losses_avg["line_loss/" + str(s)] = 0.0
 
@@ -1169,18 +1221,30 @@ class Trainer:
 
     def compute_reprojection_loss(self, pred, target):
         """Computes reprojection loss between a batch of predicted and target images
+        
+        Uses SSIM + L1 with configurable weights if SSIM is enabled,
+        otherwise uses L1 only.
+        
+        Note: This L1 loss is different from teacher-student L1 loss:
+        - Reprojection L1: |reprojected_image - original_image|
+        - Teacher-Student L1: |student_prediction - teacher_prediction|
         """
         abs_diff = torch.abs(target - pred)
-        l1_loss = abs_diff.mean(1, True)
+        reprojection_l1_loss = abs_diff.mean(1, True)
 
-        new_pred = pred * 5
-        new_target = target * 5
-
-        if self.opt.no_ssim:
-            reprojection_loss = l1_loss
-        else:
+        # 检查是否使用SSIM
+        use_ssim = getattr(self.opt, 'use_reprojection_ssim', True)
+        
+        if use_ssim and hasattr(self, 'ssim'):
+            new_pred = pred * 5
+            new_target = target * 5
             ssim_loss = self.ssim(new_pred, new_target).mean(1, True)
-            reprojection_loss = 0.85 * ssim_loss + 0.15 * l1_loss
+            # 使用可配置的权重（不需要和为1）
+            ssim_weight = getattr(self.opt, 'reprojection_ssim_weight', 0.85)
+            l1_weight = getattr(self.opt, 'reprojection_l1_weight', 0.15)
+            reprojection_loss = ssim_weight * ssim_loss + l1_weight * reprojection_l1_loss
+        else:
+            reprojection_loss = reprojection_l1_loss
 
         return reprojection_loss            
 
@@ -1199,55 +1263,83 @@ class Trainer:
             color = inputs[("color", 0, scale)]
             target = inputs[("color", 0, scale)]
 
-            #calculate the multi-reprojection loss
-            for frame_id in self.opt.frame_ids[1:]:
-                pred_ori = outputs[("color_ori", frame_id, scale)]
-                pred = outputs[("color", frame_id, scale)]
-                pred_new = outputs[("color_new", frame_id, scale)]
+                # Calculate the multi-reprojection loss (photometric loss)
+            use_photometric_loss = getattr(self.opt, 'use_photometric_loss', True)
+            if use_photometric_loss:
+                # 获取三个重投影损失的权重（可配置）
+                reproj_ori_weight = getattr(self.opt, 'reprojection_ori_weight', 0.25)
+                reproj_virtual_weight = getattr(self.opt, 'reprojection_virtual_weight', 1.0)
+                reproj_new_weight = getattr(self.opt, 'reprojection_new_weight', 1.0)
                 
-                outputs[("reprojection_losses_ori", frame_id, scale)] = self.compute_reprojection_loss(pred_ori, target)
-                losses["reprojection_losses_ori/{}_{}".format(frame_id, scale)] = outputs[("reprojection_losses_ori", frame_id, scale)].mean()
-                loss += 0.25*outputs[("reprojection_losses_ori", frame_id, scale)].mean()
+                for frame_id in self.opt.frame_ids[1:]:
+                    pred_ori = outputs[("color_ori", frame_id, scale)]
+                    pred = outputs[("color", frame_id, scale)]
+                    pred_new = outputs[("color_new", frame_id, scale)]
+                    
+                    outputs[("reprojection_losses_ori", frame_id, scale)] = self.compute_reprojection_loss(pred_ori, target)
+                    losses["reprojection_losses_ori/{}_{}".format(frame_id, scale)] = outputs[("reprojection_losses_ori", frame_id, scale)].mean()
+                    loss += reproj_ori_weight * outputs[("reprojection_losses_ori", frame_id, scale)].mean()
 
-                outputs[("reprojection_losses_vitual", frame_id, scale)] = self.compute_reprojection_loss(pred, target)
-                losses["reprojection_losses_vitual/{}_{}".format(frame_id, scale)] = outputs[("reprojection_losses_vitual", frame_id, scale)].mean()
-                loss += outputs[("reprojection_losses_vitual", frame_id, scale)].mean()
+                    outputs[("reprojection_losses_vitual", frame_id, scale)] = self.compute_reprojection_loss(pred, target)
+                    losses["reprojection_losses_vitual/{}_{}".format(frame_id, scale)] = outputs[("reprojection_losses_vitual", frame_id, scale)].mean()
+                    loss += reproj_virtual_weight * outputs[("reprojection_losses_vitual", frame_id, scale)].mean()
 
-                outputs[("reprojection_losses_new", frame_id, scale)] = self.compute_reprojection_loss(pred_new, target)
-                losses["reprojection_losses_new/{}_{}".format(frame_id, scale)] = outputs[("reprojection_losses_new", frame_id, scale)].mean()
-                loss += outputs[("reprojection_losses_new", frame_id, scale)].mean()
+                    outputs[("reprojection_losses_new", frame_id, scale)] = self.compute_reprojection_loss(pred_new, target)
+                    losses["reprojection_losses_new/{}_{}".format(frame_id, scale)] = outputs[("reprojection_losses_new", frame_id, scale)].mean()
+                    loss += reproj_new_weight * outputs[("reprojection_losses_new", frame_id, scale)].mean()
+            else:
+                # 如果禁用photometric loss，设置所有reprojection loss为0
+                for frame_id in self.opt.frame_ids[1:]:
+                    losses["reprojection_losses_ori/{}_{}".format(frame_id, scale)] = torch.tensor(0.0).to(self.device)
+                    losses["reprojection_losses_vitual/{}_{}".format(frame_id, scale)] = torch.tensor(0.0).to(self.device)
+                    losses["reprojection_losses_new/{}_{}".format(frame_id, scale)] = torch.tensor(0.0).to(self.device)
 
 
             # Smoothness loss: use coeff if available (DepthDecoder), else use disp (DiffusionDecoder)
-            if self.opt.disable_plane_smoothness or ("coeff", scale) not in outputs:
-                # For diffusion decoder or when plane smoothness is disabled,
-                # compute smoothness on normalized disparity
-                mean_disp = disp.mean(2, True).mean(3, True)
-                norm_disp = disp / (mean_disp + 1e-7)
-                smooth_loss = get_smooth_loss(norm_disp, color)
+            use_smoothness_loss = getattr(self.opt, 'use_smoothness_loss', True)
+            if use_smoothness_loss:
+                if self.opt.disable_plane_smoothness or ("coeff", scale) not in outputs:
+                    # For diffusion decoder or when plane smoothness is disabled,
+                    # compute smoothness on normalized disparity
+                    mean_disp = disp.mean(2, True).mean(3, True)
+                    norm_disp = disp / (mean_disp + 1e-7)
+                    smooth_loss = get_smooth_loss(norm_disp, color)
+                else:
+                    # For original decoder with pixel coordinate modulation,
+                    # compute smoothness on normalized coefficients
+                    mean_coeff = outputs[("coeff", scale)].abs().mean(2, True).mean(3, True)
+                    norm_coeff = outputs[("coeff", scale)] / (mean_coeff + 1e-7)
+                    smooth_loss = get_smooth_loss(norm_coeff, color)
+                
+                loss += self.opt.smoothness_weight / (2 ** scale) * smooth_loss
+                losses["smooth_loss/{}".format(scale)] = smooth_loss
             else:
-                # For original decoder with pixel coordinate modulation,
-                # compute smoothness on normalized coefficients
-                mean_coeff = outputs[("coeff", scale)].abs().mean(2, True).mean(3, True)
-                norm_coeff = outputs[("coeff", scale)] / (mean_coeff + 1e-7)
-                smooth_loss = get_smooth_loss(norm_coeff, color)
+                losses["smooth_loss/{}".format(scale)] = torch.tensor(0.0).to(self.device)
 
-            loss += self.opt.smoothness_weight / (2 ** scale) * smooth_loss
-            losses["smooth_loss/{}".format(scale)] = smooth_loss
-
+            # Geometric regularization losses
             point3D = outputs[("cam_points", 0, scale)][:, :3, ...]
             mean_depth = outputs[("depth_ori", 0, scale)].mean(2, True).mean(3)
             norm_point3D = point3D/(mean_depth + 1e-7)
 
-            if not self.opt.disable_plane_regularization:
+            # Plane regularization loss
+            use_plane_reg = getattr(self.opt, 'use_plane_regularization', True)
+            
+            if use_plane_reg:
                 plane_loss = get_plane_loss(inputs[("plane_keysets", 0, scale)], norm_point3D)
                 loss += self.opt.plane_weight * plane_loss
                 losses["plane_loss/{}".format(scale)] = plane_loss
+            else:
+                losses["plane_loss/{}".format(scale)] = torch.tensor(0.0).to(self.device)
 
-            if not self.opt.disable_line_regularization:
+            # Line regularization loss
+            use_line_reg = getattr(self.opt, 'use_line_regularization', True)
+            
+            if use_line_reg:
                 line_loss = get_line_loss(inputs[("line_keysets", 0, scale)], norm_point3D)
                 loss += self.opt.line_weight * line_loss
                 losses["line_loss/{}".format(scale)] = line_loss
+            else:
+                losses["line_loss/{}".format(scale)] = torch.tensor(0.0).to(self.device)
             
             losses["loss/{}".format(scale)] = loss
             total_loss += loss
