@@ -12,8 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from collections import OrderedDict
-from layers import *
-from ..common import ConvBlock, Conv3x3
+from layers.network_layers import ConvBlock, Conv3x3, upsample
 
 # class DepthDecoder(nn.Module):
 #     def __init__(self, num_ch_enc, scales=range(4), num_output_channels=3, use_skips=True, PixelCoorModu=True):

@@ -6,7 +6,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from collections import OrderedDict
-from layers import *
+from layers.network_layers import upsample
 from timm.models.layers import trunc_normal_
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 from typing import Union, Dict, Tuple, Optional

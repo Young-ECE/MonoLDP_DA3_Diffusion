@@ -11,7 +11,7 @@ import torch
 from torchvision import transforms
 
 import networks
-from layers import disp_to_depth
+from layers.transforms import disp_to_depth
 import torch.nn as nn
 
 def parse_args():

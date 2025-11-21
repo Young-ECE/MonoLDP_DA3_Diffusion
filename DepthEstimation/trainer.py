@@ -8,6 +8,7 @@ import numpy as np
 import time
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -15,14 +16,17 @@ from tensorboardX import SummaryWriter
 
 import json
 
-from utils import *
-from layers import *
+from utils import readlines, normalize_image, sec_to_hm_str
+from layers.network_layers import SSIM, BackprojectDepth, Project3D
+from layers.geometry import transformation_from_parameters
+from layers.transforms import disp_to_depth
+from layers.losses import get_smooth_loss, get_plane_loss, get_line_loss
+from layers.metrics import compute_depth_errors
 
 import datasets
 import networks
 from IPython import embed
 
-import torch.nn.functional as F
 import os
 
 
