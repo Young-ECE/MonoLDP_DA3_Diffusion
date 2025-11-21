@@ -538,11 +538,35 @@ class Trainer:
         losses = self.compute_losses(inputs, outputs)
         
         # 扩散相关损失
-        # L1损失：学生与教师的一致性
+        # L1损失：学生与教师的一致性（基础对齐损失）
         l1_loss = 0
         for scale in self.opt.scales:
             l1_loss += F.l1_loss(outputs[("predisp", scale)], outputs[("disp", scale)])
         losses['l1'] = l1_loss / len(self.opt.scales)
+        
+        # MSE损失：学生与教师的一致性（更强调大误差，有助于快速收敛）
+        mse_loss = 0
+        use_mse_loss = getattr(self.opt, 'use_teacher_student_mse', False)
+        if use_mse_loss:
+            for scale in self.opt.scales:
+                mse_loss += F.mse_loss(outputs[("predisp", scale)], outputs[("disp", scale)])
+            losses['mse'] = mse_loss / len(self.opt.scales)
+        else:
+            losses['mse'] = torch.tensor(0.0).to(self.device)
+        
+        # SSIM损失：学生与教师的结构相似性（关注整体结构一致性）
+        ssim_loss = 0
+        use_ssim_loss = getattr(self.opt, 'use_teacher_student_ssim', False)
+        if use_ssim_loss and hasattr(self, 'ssim'):
+            for scale in self.opt.scales:
+                teacher_disp = outputs[("predisp", scale)]
+                student_disp = outputs[("disp", scale)]
+                # SSIM损失（1 - SSIM），值越小表示越相似
+                ssim_val = self.ssim(teacher_disp * 5, student_disp * 5).mean()
+                ssim_loss += ssim_val
+            losses['ssim_teacher_student'] = ssim_loss / len(self.opt.scales)
+        else:
+            losses['ssim_teacher_student'] = torch.tensor(0.0).to(self.device)
         
         # DDIM损失：扩散模型的去噪损失
         ddim_loss = 0
@@ -554,16 +578,22 @@ class Trainer:
         # 保存原始光度损失
         losses['photometric'] = losses["loss"].clone()
         
-        # 总损失 = 光度损失 + L1损失 + DDIM损失
-        # 注意：增加L1权重有助于学生模型更好跟随教师模型
+        # 总损失 = 光度损失 + L1损失 + MSE损失 + SSIM损失 + DDIM损失
+        # 注意：增加对齐损失权重有助于学生模型更好跟随教师模型
         photometric_weight = getattr(self.opt, 'photometric_weight', 1.0)
+        mse_weight = getattr(self.opt, 'teacher_student_mse_weight', 0.0)
+        ssim_weight = getattr(self.opt, 'teacher_student_ssim_weight', 0.0)
         losses["loss"] = (photometric_weight * losses['photometric'] + 
                          self.opt.diffusion_l1_weight * losses['l1'] + 
+                         mse_weight * losses['mse'] +
+                         ssim_weight * losses['ssim_teacher_student'] +
                          self.opt.diffusion_ddim_weight * losses['ddim'])
         
         # 记录各损失项的独立值，方便分析
         losses['loss_photometric'] = losses['photometric']
         losses['loss_l1'] = losses['l1']
+        losses['loss_mse'] = losses['mse']
+        losses['loss_ssim_teacher_student'] = losses['ssim_teacher_student']
         losses['loss_ddim'] = losses['ddim']
 
         return outputs, losses

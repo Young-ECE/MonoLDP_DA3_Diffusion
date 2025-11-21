@@ -83,7 +83,7 @@ class MonodepthOptions:
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
-                                 default=15)
+                                 default=20)
         self.parser.add_argument("--scheduler_step_size",
                                  type=int,
                                  help="step size of the scheduler",
@@ -130,7 +130,7 @@ class MonodepthOptions:
         self.parser.add_argument("--smoothness_weight",
                                  type=float,
                                  help="smoothness loss weight (⚠️ high value smooths details)",
-                                 default=0.05)  # 从0.2降低到0.05，更有利于细节
+                                 default=0.02)  # 从0.2降低到0.05，更有利于细节
         
         # Plane Regularization (平面正则化)
         # 作用：强制4个点共面，假设场景中存在平面结构
@@ -160,12 +160,15 @@ class MonodepthOptions:
         
         # Photometric Loss (光度损失)
         # 作用：重投影误差，确保深度预测与图像一致
-        # 影响：✅ 有利于细节对齐
-        # 注意：权重固定为1.0，作为基础损失
+        # 影响：✅ 有利于细节对齐，但可能会干扰学生模型跟随教师
+        # 注意：如果想让学生模型更专注于跟随教师，可以降低此权重（0.5-1.0）
+        #       如果希望平衡几何一致性和教师对齐，保持1.0-1.5
         self.parser.add_argument("--photometric_weight",
                                  type=float,
-                                 help="photometric reprojection loss weight (base loss, usually 1.0)",
-                                 default=1.0)
+                                 help="photometric reprojection loss weight. "
+                                      "Lower (0.5-1.0) to focus more on teacher alignment, "
+                                      "Higher (1.0-1.5) to balance geometry consistency",
+                                 default=0.5)  # 从1.5降低到0.5，减少几何约束的干扰
         
         # SSIM Loss (结构相似性损失)
         # 作用：在reprojection loss中与L1混合使用
@@ -216,22 +219,52 @@ class MonodepthOptions:
         # 作用：学生模型与教师模型预测的一致性损失
         # 影响：✅ 有助于学生模型学习教师的知识
         # 注意：如果教师模型本身不够细节，高权重可能让学生也丢失细节
-        # 建议：通常1.0-3.0，根据教师模型质量调整
+        # 建议：通常1.0-10.0，如果想让学生模型尽可能逼近教师，可以设置5.0-10.0
         self.parser.add_argument("--diffusion_l1_weight",
                                 type=float,
-                                default=2.0,  # 从1.0增加到2.0，强制学生模型更好跟随教师
+                                default=5.0,  # 从3.0增加到5.0，更强调学生跟随教师
                                 help="weight for L1 loss between teacher and student predictions. "
-                                     "Higher = stronger teacher-student alignment")
+                                     "Higher = stronger teacher-student alignment. "
+                                     "For maximum alignment, use 5.0-10.0")
+        
+        # Teacher-Student MSE Loss (学生-教师MSE损失)
+        # 作用：MSE损失对大误差更敏感，有助于快速收敛
+        # 影响：✅ 有助于学生模型快速逼近教师模型
+        # 建议：如果使用，权重通常设置为0.5-2.0
+        self.parser.add_argument("--use_teacher_student_mse",
+                                help="enable MSE loss between teacher and student predictions",
+                                action="store_true",
+                                default=False)
+        self.parser.add_argument("--teacher_student_mse_weight",
+                                type=float,
+                                default=1.0,
+                                help="weight for MSE loss between teacher and student predictions. "
+                                     "Used together with L1 loss for stronger alignment")
+        
+        # Teacher-Student SSIM Loss (学生-教师SSIM损失)
+        # 作用：SSIM损失关注结构相似性，有助于整体结构对齐
+        # 影响：✅ 有助于学生模型在结构上与教师对齐
+        # 建议：如果使用，权重通常设置为0.5-2.0
+        self.parser.add_argument("--use_teacher_student_ssim",
+                                help="enable SSIM loss between teacher and student predictions",
+                                action="store_true",
+                                default=False)
+        self.parser.add_argument("--teacher_student_ssim_weight",
+                                type=float,
+                                default=1.0,
+                                help="weight for SSIM loss between teacher and student predictions. "
+                                     "Helps align structural similarity")
         
         # Diffusion DDIM Loss Weight (扩散DDIM损失权重)
         # 作用：扩散模型的去噪损失，训练噪声预测网络
         # 影响：✅ 有利于细节生成（扩散模型本身设计用于生成细节）
-        # 建议：通常0.5-2.0
+        # 建议：通常0.5-2.0，如果想更专注于跟随教师，可以降低权重
         self.parser.add_argument("--diffusion_ddim_weight",
                                 type=float,
-                                default=1.0,
+                                default=1.0,  # 从2.0降低到1.0，减少扩散损失的干扰
                                 help="weight for DDIM diffusion loss (denoising loss). "
-                                     "✅ Helps preserve details")
+                                     "✅ Helps preserve details. "
+                                     "Lower if you want to focus more on teacher alignment")
         
         # ====================================================================
         # MASK TRAINING OPTIONS (Mask训练配置)
