@@ -1,8 +1,8 @@
-# Copyright Niantic 2019. Patent Pending. All rights reserved.
-#
-# This software is licensed under the terms of the Monodepth2 licence
-# which allows for non-commercial use only, the full terms of which are made
-# available in the LICENSE file.
+"""Pose decoder modules for camera pose estimation.
+
+This module provides pose decoders for estimating relative camera poses between frames.
+All variants share the same architecture but are kept separate for backward compatibility.
+"""
 
 from __future__ import absolute_import, division, print_function
 
@@ -12,6 +12,16 @@ from collections import OrderedDict
 
 
 class PoseDecoder(nn.Module):
+    """Standard pose decoder for estimating relative camera poses.
+    
+    Predicts 6-DOF pose (3 rotation + 3 translation) between camera frames.
+    
+    Args:
+        num_ch_enc: List of encoder channel numbers
+        num_input_features: Number of input frames
+        num_frames_to_predict_for: Number of poses to predict (default: num_input_features - 1)
+        stride: Convolution stride (default: 1)
+    """
     def __init__(self, num_ch_enc, num_input_features, num_frames_to_predict_for=None, stride=1):
         super(PoseDecoder, self).__init__()
 
@@ -33,6 +43,15 @@ class PoseDecoder(nn.Module):
         self.net = nn.ModuleList(list(self.convs.values()))
 
     def forward(self, input_features):
+        """Forward pass.
+        
+        Args:
+            input_features: List of feature maps from encoder
+            
+        Returns:
+            axisangle: Rotation in axis-angle representation (batch, num_frames, 1, 3)
+            translation: Translation vector (batch, num_frames, 1, 3)
+        """
         last_features = [f[-1] for f in input_features]
 
         cat_features = [self.relu(self.convs["squeeze"](f)) for f in last_features]
@@ -52,3 +71,20 @@ class PoseDecoder(nn.Module):
         translation = out[..., 3:]
 
         return axisangle, translation
+
+
+class PoseDecoderRec(PoseDecoder):
+    """Pose decoder for recursive pose estimation.
+    
+    This is identical to PoseDecoder but kept as a separate class for backward compatibility.
+    """
+    pass
+
+
+class PoseDecoderThird(PoseDecoder):
+    """Pose decoder for third-frame pose estimation.
+    
+    This is identical to PoseDecoder but kept as a separate class for backward compatibility.
+    """
+    pass
+

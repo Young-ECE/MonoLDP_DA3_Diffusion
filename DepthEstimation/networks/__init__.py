@@ -1,13 +1,45 @@
-from .resnet_encoder import ResnetEncoder
-from .depth_decoder import DepthDecoder
-from .depth_decoder_diffusion import DepthDecoderDiffusion
+"""Network modules for monocular depth estimation.
 
-from .pose_decoder import PoseDecoder
-from .pose_decoder_rec import PoseDecoderRec
-from .pose_decoder_third import PoseDecoderThird
+This package provides all network architectures used in the depth estimation pipeline:
+- Encoders: Feature extraction networks
+- Decoders: Depth prediction networks
+- Pose: Camera pose estimation networks
+- Scale: Depth scale prediction networks
+- Teacher: Teacher model wrappers
+"""
 
-from .scale_net import ScaleNetwork
-from .scale_net import ProbabilisticScaleRegressionHead
+from __future__ import absolute_import, division, print_function
 
-# Depth Anything V3 teacher model
-from .depth_anything_v3_wrapper import DepthAnythingV3Wrapper, create_depth_anything_v3_teacher
+# Encoders
+from .encoders.resnet_encoder import ResnetEncoder
+
+# Decoders
+from .decoders.depth_decoder import DepthDecoder
+from .decoders.depth_decoder_diffusion import DepthDecoderDiffusion
+
+# Pose decoders
+from .pose.pose_decoder import PoseDecoder, PoseDecoderRec, PoseDecoderThird
+
+# Scale networks
+from .scale.scale_net import ScaleNetwork, ProbabilisticScaleRegressionHead
+
+# Teacher models
+from .teacher.depth_anything_v3_wrapper import DepthAnythingV3Wrapper, create_depth_anything_v3_teacher
+
+__all__ = [
+    # Encoders
+    'ResnetEncoder',
+    # Decoders
+    'DepthDecoder',
+    'DepthDecoderDiffusion',
+    # Pose
+    'PoseDecoder',
+    'PoseDecoderRec',
+    'PoseDecoderThird',
+    # Scale
+    'ScaleNetwork',
+    'ProbabilisticScaleRegressionHead',
+    # Teacher
+    'DepthAnythingV3Wrapper',
+    'create_depth_anything_v3_teacher',
+]

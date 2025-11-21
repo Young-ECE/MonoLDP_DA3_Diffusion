@@ -10,6 +10,7 @@ from layers import *
 from timm.models.layers import trunc_normal_
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 from typing import Union, Dict, Tuple, Optional
+from ..common import Conv3x3
 
 
 class ConvBlock(nn.Module):

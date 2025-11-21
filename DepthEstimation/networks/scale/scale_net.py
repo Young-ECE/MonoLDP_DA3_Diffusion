@@ -1,7 +1,15 @@
+"""Scale network modules for depth scale prediction.
+
+This module provides networks for predicting depth scale factors using
+non-local attention mechanisms.
+"""
+
+from __future__ import absolute_import, division, print_function
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from networks.lib import NONLocalBlock2D
+from ..utils.non_local_block import NONLocalBlock2D
 
 class ProbabilisticScaleRegressionHead(nn.Module):
     def __init__(self, in_channels, max_scale=10, min_scale=1e-2):
