@@ -213,13 +213,31 @@ def get_smooth_loss(disp, img):
 
 
 def get_plane_loss(plane_keysets, points_3d):
-
+    """
+    Compute plane consistency loss.
+    
+    Args:
+        plane_keysets: Tensor of shape (batch_size, 4, num_keysets)
+                      Invalid keysets are marked with -1
+        points_3d: Tensor of shape (batch_size, 3, H*W)
+    
+    Returns:
+        plane_loss: Scalar loss value
+    """
     bs, ch, _ = points_3d.shape
 
-    start_points = torch.gather(points_3d, 2, torch.stack(ch * [plane_keysets[:, 0]], 1))
-    end_points_A = torch.gather(points_3d, 2, torch.stack(ch * [plane_keysets[:, 1]], 1))
-    end_points_B = torch.gather(points_3d, 2, torch.stack(ch * [plane_keysets[:, 2]], 1))
-    end_points_C = torch.gather(points_3d, 2, torch.stack(ch * [plane_keysets[:, 3]], 1))
+    # Extract points for each keyset
+    # plane_keysets shape: (batch_size, 4, num_keysets)
+    # We need to handle invalid keysets (marked with -1)
+    
+    # Clamp negative indices to 0 for gather (will filter out invalid later)
+    # Note: torch.gather with negative indices wraps around, so we need to be careful
+    plane_keysets_clamped = torch.clamp(plane_keysets, min=0)
+    
+    start_points = torch.gather(points_3d, 2, torch.stack(ch * [plane_keysets_clamped[:, 0]], 1))
+    end_points_A = torch.gather(points_3d, 2, torch.stack(ch * [plane_keysets_clamped[:, 1]], 1))
+    end_points_B = torch.gather(points_3d, 2, torch.stack(ch * [plane_keysets_clamped[:, 2]], 1))
+    end_points_C = torch.gather(points_3d, 2, torch.stack(ch * [plane_keysets_clamped[:, 3]], 1))
 
     vector_A = end_points_A - start_points
     vector_B = end_points_B - start_points
@@ -229,24 +247,66 @@ def get_plane_loss(plane_keysets, points_3d):
 
     AxB_dot_C = torch.sum(AxB*vector_C, dim=1)
 
-    plane_loss = torch.abs(AxB_dot_C).mean()
+    # Filter out invalid keysets (where any index is -1)
+    # Check if all 4 indices in each keyset are valid (>= 0)
+    valid_mask = torch.all(plane_keysets >= 0, dim=1)  # (batch_size, num_keysets)
+    
+    if torch.any(valid_mask):
+        # Only compute loss for valid keysets
+        valid_losses = torch.abs(AxB_dot_C) * valid_mask.float()
+        # Average over valid keysets only
+        plane_loss = valid_losses.sum() / (valid_mask.sum().float() + 1e-7)
+    else:
+        # No valid keysets, return zero loss
+        plane_loss = torch.tensor(0.0, device=points_3d.device, dtype=points_3d.dtype)
 
     return plane_loss
 
 
 def get_line_loss(line_keysets, points_3d):
+    """
+    Compute line consistency loss.
+    
+    Args:
+        line_keysets: Tensor of shape (batch_size, 3, num_keysets)
+                     Invalid keysets are marked with -1
+        points_3d: Tensor of shape (batch_size, 3, H*W)
+    
+    Returns:
+        line_loss: Scalar loss value
+    """
     bs, ch, _ = points_3d.shape
 
-    start_points = torch.gather(points_3d, 2, torch.stack(ch * [line_keysets[:, 0]], 1))
-    end_points_A = torch.gather(points_3d, 2, torch.stack(ch * [line_keysets[:, 1]], 1))
-    end_points_B = torch.gather(points_3d, 2, torch.stack(ch * [line_keysets[:, 2]], 1))
+    # Extract points for each keyset
+    # line_keysets shape: (batch_size, 3, num_keysets)
+    # We need to handle invalid keysets (marked with -1)
+    
+    # Clamp negative indices to 0 for gather (will filter out invalid later)
+    line_keysets_clamped = torch.clamp(line_keysets, min=0)
+    
+    start_points = torch.gather(points_3d, 2, torch.stack(ch * [line_keysets_clamped[:, 0]], 1))
+    end_points_A = torch.gather(points_3d, 2, torch.stack(ch * [line_keysets_clamped[:, 1]], 1))
+    end_points_B = torch.gather(points_3d, 2, torch.stack(ch * [line_keysets_clamped[:, 2]], 1))
 
     vector_A = end_points_A - start_points
     vector_B = end_points_B - start_points
 
     AxB = torch.cross(vector_A, vector_B, dim=1)
 
-    line_loss = torch.norm(AxB, p=2, dim=1).mean()
+    line_norms = torch.norm(AxB, p=2, dim=1)  # (batch_size, num_keysets)
+
+    # Filter out invalid keysets (where any index is -1)
+    # Check if all 3 indices in each keyset are valid (>= 0)
+    valid_mask = torch.all(line_keysets >= 0, dim=1)  # (batch_size, num_keysets)
+    
+    if torch.any(valid_mask):
+        # Only compute loss for valid keysets
+        valid_losses = line_norms * valid_mask.float()
+        # Average over valid keysets only
+        line_loss = valid_losses.sum() / (valid_mask.sum().float() + 1e-7)
+    else:
+        # No valid keysets, return zero loss
+        line_loss = torch.tensor(0.0, device=points_3d.device, dtype=points_3d.dtype)
 
     return line_loss
 

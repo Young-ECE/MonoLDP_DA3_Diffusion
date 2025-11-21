@@ -1325,9 +1325,17 @@ class Trainer:
             use_plane_reg = getattr(self.opt, 'use_plane_regularization', True)
             
             if use_plane_reg:
-                plane_loss = get_plane_loss(inputs[("plane_keysets", 0, scale)], norm_point3D)
-                loss += self.opt.plane_weight * plane_loss
-                losses["plane_loss/{}".format(scale)] = plane_loss
+                plane_keysets = inputs[("plane_keysets", 0, scale)]
+                # Check if keysets are valid (not all -1, which indicates empty/invalid keysets)
+                # Keysets shape: (batch_size, 4, num_keysets)
+                # Check if any keyset in the batch has valid indices (>= 0)
+                if torch.any(plane_keysets >= 0):
+                    plane_loss = get_plane_loss(plane_keysets, norm_point3D)
+                    loss += self.opt.plane_weight * plane_loss
+                    losses["plane_loss/{}".format(scale)] = plane_loss
+                else:
+                    # No valid keysets, skip loss calculation
+                    losses["plane_loss/{}".format(scale)] = torch.tensor(0.0).to(self.device)
             else:
                 losses["plane_loss/{}".format(scale)] = torch.tensor(0.0).to(self.device)
 
@@ -1335,9 +1343,17 @@ class Trainer:
             use_line_reg = getattr(self.opt, 'use_line_regularization', True)
             
             if use_line_reg:
-                line_loss = get_line_loss(inputs[("line_keysets", 0, scale)], norm_point3D)
-                loss += self.opt.line_weight * line_loss
-                losses["line_loss/{}".format(scale)] = line_loss
+                line_keysets = inputs[("line_keysets", 0, scale)]
+                # Check if keysets are valid (not all -1, which indicates empty/invalid keysets)
+                # Keysets shape: (batch_size, 3, num_keysets)
+                # Check if any keyset in the batch has valid indices (>= 0)
+                if torch.any(line_keysets >= 0):
+                    line_loss = get_line_loss(line_keysets, norm_point3D)
+                    loss += self.opt.line_weight * line_loss
+                    losses["line_loss/{}".format(scale)] = line_loss
+                else:
+                    # No valid keysets, skip loss calculation
+                    losses["line_loss/{}".format(scale)] = torch.tensor(0.0).to(self.device)
             else:
                 losses["line_loss/{}".format(scale)] = torch.tensor(0.0).to(self.device)
             
