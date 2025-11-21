@@ -31,33 +31,92 @@ import os
 
 
 class Trainer:
+    """Trainer class for monocular depth estimation with diffusion decoder.
+    
+    This trainer implements a knowledge distillation approach using:
+    - Teacher model: Depth Anything V3 (frozen)
+    - Student model: ResNet encoder + Diffusion decoder
+    - Multiple pose decoders for iterative pose refinement
+    - Geometric regularization losses (plane/line consistency)
+    """
+    
     def __init__(self, options):
+        """Initialize the trainer with configuration.
+        
+        Args:
+            options: Training options (MonodepthOptions instance)
+        """
         self.opt = options
+        
+        # Initialize basic attributes
+        self.models = {}
+        self.parameters_to_train = []
+        
+        # Setup paths and configuration
+        self._setup_paths_and_config()
+        
+        # Setup device (CPU/GPU)
+        self._setup_device()
+        
+        # Setup training parameters
+        self._setup_training_parameters()
+        
+        # Build all models
+        self._build_depth_models()
+        self._build_pose_models()
+        
+        # Setup optimizer and scheduler
+        self._setup_optimizer()
+        
+        # Load pretrained weights if specified
+        if self.opt.load_weights_folder is not None:
+            self.load_model()
+        
+        # Setup data loaders
+        self._setup_data_loaders()
+        
+        # Setup loss computation layers
+        self._setup_loss_layers()
+        
+        # Setup geometry computation layers
+        self._setup_geometry_layers()
+        
+        # Setup logging and utilities
+        self._setup_logging()
+        
+        # Print configuration summary
+        self.print_config()
+        
+        # Save options to disk
+        if not self.debug_no_save:
+            self.save_opts()
+    
+    def _setup_paths_and_config(self):
+        """Setup log paths and validate configuration."""
         import datetime
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         self.log_path = os.path.join(self.opt.log_dir, f"{self.opt.model_name}_{timestamp}")
         print("-> Log path: {}".format(self.log_path))
         print("-> Model name: {}".format(self.opt.model_name))
+        
         self.debug_no_save = getattr(self.opt, "debug_no_save", False)
         if self.debug_no_save:
             print("⚠ Debug mode enabled: training artifacts will not be written to disk.")
-
-        # checking height and width are multiples of 32
+        
+        # Validate image dimensions
         assert self.opt.height % 32 == 0, "'height' must be a multiple of 32"
         assert self.opt.width % 32 == 0, "'width' must be a multiple of 32"
-
-        self.models = {}
-        self.parameters_to_train = []
-
-        # 设置设备（支持指定GPU）
+    
+    def _setup_device(self):
+        """Setup computation device (CPU or GPU)."""
         if self.opt.no_cuda:
             self.device = torch.device("cpu")
         else:
             if self.opt.cuda_device is not None:
-                # 使用cuda_device参数（如 "cuda:1"）
+                # Use cuda_device parameter (e.g., "cuda:1")
                 self.device = torch.device(self.opt.cuda_device)
             else:
-                # 使用gpu_id参数
+                # Use gpu_id parameter
                 gpu_id = getattr(self.opt, 'gpu_id', 0)
                 if torch.cuda.is_available():
                     if gpu_id >= torch.cuda.device_count():
@@ -73,39 +132,45 @@ class Trainer:
             print(f"  GPU ID: {self.device.index if hasattr(self.device, 'index') else 'N/A'}")
             if hasattr(self.device, 'index') and self.device.index is not None:
                 print(f"  GPU Name: {torch.cuda.get_device_name(self.device.index)}")
-
+    
+    def _setup_training_parameters(self):
+        """Setup training parameters (scales, frames, etc.)."""
         self.num_scales = len(self.opt.scales)
         print("Training scales:", self.opt.scales)
+        
         self.num_input_frames = len(self.opt.frame_ids)
         print("Input frames:", self.opt.frame_ids)
+        
         self.num_pose_frames = 2 if self.opt.pose_model_input == "pairs" else self.num_input_frames
         print("Pose frames:", self.num_pose_frames)
-
+        
         assert self.opt.frame_ids[0] == 0, "frame_ids must start with 0"
-
+    
+    def _build_depth_models(self):
+        """Build depth estimation models (encoder, scale network, decoder, teacher)."""
+        # Build encoder
         self.models["encoder"] = networks.ResnetEncoder(
-        self.opt.num_layers, self.opt.weights_init == "pretrained")
+            self.opt.num_layers, self.opt.weights_init == "pretrained")
         self.models["encoder"].to(self.device)
         self.parameters_to_train += list(self.models["encoder"].parameters())
         
+        # Build scale prediction network
         res_out_channel = [64, 64, 128, 256, 512]
-
-        #scale factor prediction
         self.models["scalenet"] = networks.ScaleNetwork(res_out_channel)
         self.models["scalenet"].to(self.device)
         self.parameters_to_train += list(self.models["scalenet"].parameters())
         
+        # Build scale regression heads
         self.models["regression"] = nn.ModuleList([
-                        networks.ProbabilisticScaleRegressionHead(in_channels=out_channels) for out_channels in res_out_channel])
+            networks.ProbabilisticScaleRegressionHead(in_channels=out_channels) 
+            for out_channels in res_out_channel])
         self.models["regression"].to(self.device)
         self.parameters_to_train += list(self.models["regression"].parameters())
         
-        # 深度解码器初始化 - 使用扩散解码器 + Depth Anything V3 教师模型
+        # Build teacher model (Depth Anything V3)
         print("=" * 60)
         print("🔄 使用扩散深度解码器 + Depth Anything V3 教师模型")
         print("=" * 60)
-        
-        # 创建 Depth Anything V3 教师模型
         print(f"📦 加载 Depth Anything V3 教师模型: {self.opt.depth_anything_v3_model}")
         self.models["depth_anything_v3_teacher"] = networks.create_depth_anything_v3_teacher(
             model_name=self.opt.depth_anything_v3_model,
@@ -117,7 +182,7 @@ class Trainer:
         self.models["depth_anything_v3_teacher"].eval()
         print("✓ Depth Anything V3 教师模型加载成功")
         
-        # 创建学生模型（扩散解码器）
+        # Build student model (diffusion decoder)
         # Note: Diffusion decoder outputs single-channel disparity (num_output_channels=1)
         # and does not use PixelCoorModu (follows MonoDiffusion architecture)
         self.models["depth"] = networks.DepthDecoderDiffusion(
@@ -132,159 +197,179 @@ class Trainer:
         
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
-
-        # ====================================================================
-        # Pose 模块初始化
-        # ====================================================================
-        # Pose模块采用共享编码器 + 三个独立解码器的架构：
-        # 1. pose_encoder: 共享的ResNet编码器，用于提取多帧图像的特征
-        #    输入: 拼接后的多帧图像 (B, 6, H, W) 或 (B, 3*N, H, W)
-        #    输出: 5个多尺度特征图列表
-        #
-        # 2. pose_rec: 用于predict_poses_ori，预测原始输入帧之间的pose
-        #    输入: pose_encoder提取的特征
-        #    输出: axisangle和translation，用于生成cam_T_cam_ori变换矩阵
-        #
-        # 3. pose: 用于predict_poses_second，预测第一次重投影后帧之间的pose
-        #    输入: pose_encoder提取的特征（基于第一次重投影后的图像）
-        #    输出: axisangle和translation，用于生成cam_T_cam_second变换矩阵
-        #
-        # 4. pose_third: 用于predict_poses_third，预测第二次重投影后帧之间的pose
-        #    输入: pose_encoder提取的特征（基于第二次重投影后的图像）
-        #    输出: axisangle和translation，用于生成cam_T_cam_third变换矩阵
-        #
-        # 数据流: 原始图像 → pose_rec → 第一次重投影 → pose → 第二次重投影 → pose_third
-        # ====================================================================
-        self.models["pose_encoder"] = networks.ResnetEncoder(self.opt.num_layers,
-                                                             self.opt.weights_init == "pretrained",
-                                                             num_input_images=self.num_pose_frames)
+    
+    def _build_pose_models(self):
+        """Build pose estimation models (encoder + three decoders).
+        
+        Pose module architecture:
+        - pose_encoder: Shared ResNet encoder for multi-frame feature extraction
+        - pose_rec: Predicts poses between original input frames (first pose prediction)
+        - pose: Predicts poses after first reprojection (second pose prediction)
+        - pose_third: Predicts poses after second reprojection (third pose prediction)
+        
+        Data flow: original images → pose_rec → first reprojection → pose → 
+                   second reprojection → pose_third
+        """
+        # Build shared pose encoder
+        self.models["pose_encoder"] = networks.ResnetEncoder(
+            self.opt.num_layers,
+            self.opt.weights_init == "pretrained",
+            num_input_images=self.num_pose_frames)
         self.models["pose_encoder"].to(self.device)
         self.parameters_to_train += list(self.models["pose_encoder"].parameters())
-
-        self.models["pose"] = networks.PoseDecoder(self.models["pose_encoder"].num_ch_enc,
-                                                   num_input_features=1,
-                                                   num_frames_to_predict_for=(self.num_pose_frames-1))
+        
+        # Build three pose decoders
+        pose_decoder_args = {
+            'num_ch_enc': self.models["pose_encoder"].num_ch_enc,
+            'num_input_features': 1,
+            'num_frames_to_predict_for': (self.num_pose_frames - 1)
+        }
+        
+        # Pose decoder for second prediction (after first reprojection)
+        self.models["pose"] = networks.PoseDecoder(**pose_decoder_args)
         self.models["pose"].to(self.device)
         self.parameters_to_train += list(self.models["pose"].parameters())
-
-        self.models["pose_rec"] = networks.PoseDecoderRec(self.models["pose_encoder"].num_ch_enc,
-                                                   num_input_features=1,
-                                                   num_frames_to_predict_for=(self.num_pose_frames-1))
+        
+        # Pose decoder for first prediction (original frames)
+        self.models["pose_rec"] = networks.PoseDecoderRec(**pose_decoder_args)
         self.models["pose_rec"].to(self.device)
         self.parameters_to_train += list(self.models["pose_rec"].parameters())
-
-        self.models["pose_third"] = networks.PoseDecoderThird(self.models["pose_encoder"].num_ch_enc,
-                                                   num_input_features=1,
-                                                   num_frames_to_predict_for=(self.num_pose_frames-1))
+        
+        # Pose decoder for third prediction (after second reprojection)
+        self.models["pose_third"] = networks.PoseDecoderThird(**pose_decoder_args)
         self.models["pose_third"].to(self.device)
         self.parameters_to_train += list(self.models["pose_third"].parameters())
-
-        # 使用AdamW优化器（带weight decay，有助于正则化和稳定性）
-        # 如果未指定weight_decay，使用默认值1e-2（参考MonoDiffusion）
+    
+    def _setup_optimizer(self):
+        """Setup optimizer and learning rate scheduler."""
+        # Use AdamW optimizer with weight decay for regularization
         weight_decay = getattr(self.opt, 'weight_decay', 1e-2)
-        self.model_optimizer = optim.AdamW(self.parameters_to_train, self.opt.learning_rate, weight_decay=weight_decay)
+        self.model_optimizer = optim.AdamW(
+            self.parameters_to_train, 
+            self.opt.learning_rate, 
+            weight_decay=weight_decay)
         
-        # 改进的学习率调度器：使用更平滑的衰减策略
-        # 方案1: 改进的StepLR（减小gamma，避免突然下降）
-        # 方案2: 使用CosineAnnealingLR（更平滑的衰减）
+        # Setup learning rate scheduler
         if getattr(self.opt, 'use_cosine_scheduler', False):
-            # 使用CosineAnnealingLR，更平滑的衰减
+            # Cosine annealing scheduler (smoother decay)
             T_max = self.opt.num_epochs * self.num_total_steps // len(self.train_loader)
             self.model_lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(
                 self.model_optimizer, T_max=T_max, eta_min=1e-6)
         else:
-            # 改进的StepLR：增大step_size，减小gamma，避免突然下降
-            step_size = max(self.opt.scheduler_step_size, 30)  # 至少30个epoch
-            gamma = getattr(self.opt, 'scheduler_gamma', 0.5)  # 默认0.5而不是0.1
+            # StepLR scheduler (improved: larger step_size, smaller gamma)
+            step_size = max(self.opt.scheduler_step_size, 30)  # At least 30 epochs
+            gamma = getattr(self.opt, 'scheduler_gamma', 0.5)  # Default 0.5 instead of 0.1
             self.model_lr_scheduler = optim.lr_scheduler.StepLR(
                 self.model_optimizer, step_size, gamma)
-        if self.opt.load_weights_folder is not None:
-            self.load_model()
-
+    
+    def _setup_data_loaders(self):
+        """Setup training and validation data loaders."""
         print("Training model named:\n  ", self.opt.model_name)
         print("Models and tensorboard events files are saved to:\n  ", self.opt.log_dir)
         print("Training is using:\n  ", self.device)
-
-        # data
+        
+        # Get dataset class
         datasets_dict = {"nyu": datasets.NYUDataset}
         self.dataset = datasets_dict[self.opt.dataset]
-        # print("Using dataset:", self.opt.dataset)
-
+        
+        # Load file lists
         fpath = os.path.join(os.path.dirname(__file__), "splits", self.opt.split, "{}_files.txt")
         print("Using split file:", fpath)
-
+        
         train_filenames = readlines(fpath.format("train"))
-        # print("train_filenames:", train_filenames[0:5])
         val_filenames = readlines(fpath.format("val"))
-        # print("val_filenames:", val_filenames[0:5])
         img_ext = '.jpg'
-
+        
+        # Calculate total training steps
         num_train_samples = len(train_filenames)
         self.num_total_steps = num_train_samples // self.opt.batch_size * self.opt.num_epochs
-
+        
+        # Get regularization flags
         use_plane_reg = getattr(self.opt, 'use_plane_regularization', True)
         use_line_reg = getattr(self.opt, 'use_line_regularization', True)
         
+        # Create training dataset
         train_dataset = self.dataset(
             self.opt.data_path, train_filenames, self.opt.height, self.opt.width,
             self.opt.frame_ids, self.num_scales, is_train=True, img_ext=img_ext,
             return_plane=use_plane_reg,
-            num_plane_keysets = self.opt.num_plane_keysets,
+            num_plane_keysets=self.opt.num_plane_keysets,
             return_line=use_line_reg,
-            num_line_keysets = self.opt.num_line_keysets)
-
+            num_line_keysets=self.opt.num_line_keysets)
+        
         self.train_loader = DataLoader(
             train_dataset, self.opt.batch_size, True,
             num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
-
+        
+        # Create validation dataset
         val_dataset = self.dataset(
             self.opt.data_path, val_filenames, self.opt.height, self.opt.width,
             self.opt.frame_ids, self.num_scales, is_train=False, img_ext=img_ext,
             return_plane=use_plane_reg,
-            num_plane_keysets = self.opt.num_plane_keysets,
+            num_plane_keysets=self.opt.num_plane_keysets,
             return_line=use_line_reg,
-            num_line_keysets = self.opt.num_line_keysets)
-
+            num_line_keysets=self.opt.num_line_keysets)
+        
         self.val_loader = DataLoader(
             val_dataset, self.opt.batch_size, True,
             num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
         self.val_iter = iter(self.val_loader)
-
-        self.writers = {}
-        if not self.debug_no_save:
-            for mode in ["train", "val"]:
-                self.writers[mode] = SummaryWriter(os.path.join(self.log_path, mode))
-
+        
+        print("Using split:\n  ", self.opt.split)
+        print("There are {:d} training items and {:d} validation items\n".format(
+            len(train_dataset), len(val_dataset)))
+    
+    def _setup_loss_layers(self):
+        """Setup loss computation layers.
+        
+        Sets up layers used for computing losses during training:
+        - SSIM: Structural Similarity Index Measure loss layer
+        """
+        # Setup SSIM loss layer (if enabled)
         use_reprojection_ssim = getattr(self.opt, 'use_reprojection_ssim', True)
         if use_reprojection_ssim:
             self.ssim = SSIM()
             self.ssim.to(self.device)
-
+    
+    def _setup_geometry_layers(self):
+        """Setup 3D geometry computation layers.
+        
+        Sets up layers used for 3D geometric transformations:
+        - BackprojectDepth: Converts depth maps to 3D point clouds
+        - Project3D: Projects 3D points back to 2D image coordinates
+        
+        These layers are used in the forward pass for image reprojection.
+        """
+        # Setup 3D projection layers for each scale
         self.backproject_depth = {}
         self.project_3d = {}
-        # self.project_homo = {}
         for scale in self.opt.scales:
             h = self.opt.height // (2 ** scale)
             w = self.opt.width // (2 ** scale)
-
+            
             self.backproject_depth[scale] = BackprojectDepth(self.opt.batch_size, h, w)
             self.backproject_depth[scale].to(self.device)
-
+            
             self.project_3d[scale] = Project3D(self.opt.batch_size, h, w)
             self.project_3d[scale].to(self.device)
-
-        self.depth_metric_names = [
-            "de/abs_rel", "de/sq_rel", "de/rms", "de/log_rms", "de/log10","da/a1", "da/a2", "da/a3"]
-
-        print("Using split:\n  ", self.opt.split)
-        print("There are {:d} training items and {:d} validation items\n".format(
-            len(train_dataset), len(val_dataset)))
-
-        # 打印所有配置项
-        self.print_config()
-
+    
+    def _setup_logging(self):
+        """Setup logging utilities (tensorboard writers and metric names).
+        
+        Sets up tools for logging training progress:
+        - TensorBoard writers for train/val modes
+        - Depth evaluation metric names
+        """
+        # Setup tensorboard writers
+        self.writers = {}
         if not self.debug_no_save:
-            self.save_opts()
+            for mode in ["train", "val"]:
+                self.writers[mode] = SummaryWriter(os.path.join(self.log_path, mode))
+        
+        # Depth metric names for evaluation
+        self.depth_metric_names = [
+            "de/abs_rel", "de/sq_rel", "de/rms", "de/log_rms", "de/log10",
+            "da/a1", "da/a2", "da/a3"]
 
     def print_config(self):
         """打印所有训练配置项，方便审查"""
@@ -341,6 +426,7 @@ class Trainer:
         print("\n【损失函数配置】")
         use_photometric = getattr(self.opt, 'use_photometric_loss', True)
         use_reprojection_ssim = getattr(self.opt, 'use_reprojection_ssim', True)
+        use_reprojection_l1 = getattr(self.opt, 'use_reprojection_l1', True)
         use_smoothness = getattr(self.opt, 'use_smoothness_loss', True)
         use_plane_reg = getattr(self.opt, 'use_plane_regularization', True)
         use_line_reg = getattr(self.opt, 'use_line_regularization', True)
@@ -355,7 +441,6 @@ class Trainer:
             print(f"    重投影损失组件权重: ori={getattr(self.opt, 'reprojection_ori_weight', 0.25)}, "
                   f"virtual={getattr(self.opt, 'reprojection_virtual_weight', 1.0)}, "
                   f"new={getattr(self.opt, 'reprojection_new_weight', 1.0)}")
-        print(f"  Reprojection SSIM: {'启用' if use_reprojection_ssim else '禁用'}")
         print(f"  Smoothness Loss: {'启用' if use_smoothness else '禁用'} (权重: {self.opt.smoothness_weight})")
         print(f"  Plane Regularization: {'启用' if use_plane_reg else '禁用'} (权重: {self.opt.plane_weight})")
         if use_plane_reg:
@@ -364,12 +449,12 @@ class Trainer:
         if use_line_reg:
             print(f"    线keysets数量: {self.opt.num_line_keysets}")
         print(f"  Teacher-Student L1: {'启用' if use_l1 else '禁用'} (权重: {self.opt.teacher_student_l1_weight})")
-        print(f"  Reprojection SSIM权重: {getattr(self.opt, 'reprojection_ssim_weight', 0.85)}")
-        print(f"  Reprojection L1权重: {getattr(self.opt, 'reprojection_l1_weight', 0.15)}")
+        print(f"  Reprojection SSIM: {'启用' if use_reprojection_ssim else '禁用'}(权重: {getattr(self.opt, 'reprojection_ssim_weight', 0.85)})")
+        print(f"  Reprojection L1: {'启用' if use_reprojection_l1 else '禁用'}(权重: {getattr(self.opt, 'reprojection_l1_weight', 0.15)})")
         print(f"  Teacher-Student MSE: {'启用' if use_mse else '禁用'} (权重: {getattr(self.opt, 'teacher_student_mse_weight', 1.0)})")
-        print(f"  Teacher-Student SSIM: {'启用' if use_ts_ssim else '禁用'} (权重: {getattr(self.opt, 'teacher_student_ssim_weight', 1.0)})")
-        print(f"  DDIM Loss: {'启用' if use_ddim else '禁用'} (权重: {self.opt.diffusion_ddim_weight})")
-        print(f"  Mask Training: {'启用' if use_mask else '禁用'} (权重: {getattr(self.opt, 'mask_loss_weight', 0.1)})")
+        print(f"  Teacher-Student SSIM: {'启用' if use_ts_ssim else '禁用'}(权重: {getattr(self.opt, 'teacher_student_ssim_weight', 1.0)})")
+        print(f"  DDIM Loss: {'启用' if use_ddim else '禁用'}(权重: {self.opt.diffusion_ddim_weight})")
+        print(f"  Mask Training: {'启用' if use_mask else '禁用'}(权重: {getattr(self.opt, 'mask_loss_weight', 0.1)})")
         
         # 日志配置
         print("\n【日志配置】")
@@ -415,20 +500,28 @@ class Trainer:
         print("配置审查完成，开始训练...")
         print("=" * 80 + "\n")
 
+    # ====================================================================
+    # Training Control Methods
+    # ====================================================================
+    
     def set_train(self):
-        """Convert all models to training mode
-        """
+        """Convert all models to training mode."""
         for m in self.models.values():
             m.train()
 
     def set_eval(self):
-        """Convert all models to testing/evaluation mode
-        """
+        """Convert all models to testing/evaluation mode."""
         for m in self.models.values():
             m.eval()
 
     def train(self):
-        """Run the entire training pipeline
+        """Run the entire training pipeline.
+        
+        This method:
+        1. Initializes training state (epoch, step, start time)
+        2. Runs initial validation
+        3. Iterates through epochs, running training and validation
+        4. Saves model checkpoints at specified intervals
         """
         self.epoch = 0
         self.step = 0
@@ -441,7 +534,18 @@ class Trainer:
                 self.save_model()
 
     def run_epoch(self):
-        """Run a single epoch of training and validation
+        """Run a single epoch of training and validation.
+        
+        For each batch:
+        1. Process batch through network
+        2. Compute gradients and apply gradient clipping
+        3. Update model parameters
+        4. Optionally run mask training
+        5. Log metrics at specified intervals
+        
+        After epoch completion:
+        1. Update learning rate scheduler
+        2. Run validation
         """
 
         print("Training")
@@ -526,9 +630,26 @@ class Trainer:
         self.val()
 
 
+    # ====================================================================
+    # Batch Processing Methods
+    # ====================================================================
+    
     def process_batch(self, inputs):
-        """Pass a minibatch through the network and generate images and losses."""
-        """Pass a minibatch through the network and generate images and losses
+        """Process a minibatch through the network and compute losses.
+        
+        Pipeline:
+        1. Generate teacher predictions (Depth Anything V3)
+        2. Forward pass through student model (encoder + diffusion decoder)
+        3. Predict poses for three reprojection stages
+        4. Generate reprojected images
+        5. Compute all losses (photometric, smoothness, geometric, teacher-student, diffusion)
+        
+        Args:
+            inputs: Dictionary containing input images, intrinsics, keysets, etc.
+            
+        Returns:
+            outputs: Dictionary containing predictions, reprojected images, etc.
+            losses: Dictionary containing all computed losses
         """
 
         for key, ipt in inputs.items():
@@ -653,17 +774,25 @@ class Trainer:
         return outputs, losses
 
     def process_batch_mask(self, inputs, outputs):
-        """Mask训练：使用随机mask对特征进行遮挡，增强模型鲁棒性
+        """Mask training: Apply random masks to features for robustness.
         
-        原理：
-        - 生成随机mask（部分特征被遮挡）
-        - 使用masked特征进行深度预测
-        - 损失：masked预测与完整预测的一致性
+        This method implements feature-level masking to improve model generalization:
+        - Generates random masks (partially occlude features)
+        - Performs depth prediction with masked features
+        - Computes consistency loss between masked and full predictions
         
-        优势：
-        - 增强泛化能力
-        - 处理遮挡情况
-        - 有助于细节保留（特征级别的mask不会直接破坏细节）
+        Advantages:
+        - Improves generalization
+        - Handles occlusion scenarios
+        - Preserves details (feature-level masking doesn't directly destroy details)
+        
+        Args:
+            inputs: Input batch dictionary
+            outputs: Outputs from full prediction (used as pseudo-GT)
+            
+        Returns:
+            outputs_mask: Predictions from masked features
+            losses_mask: Consistency loss between masked and full predictions
         """
         # 获取编码器特征
         features = self.models["encoder"](inputs[("color_aug", 0, 0)])
@@ -1223,8 +1352,12 @@ class Trainer:
                 outputs[("depth_ori", frame_id, scale)] = frame_depth 
 
 
+    # ====================================================================
+    # Loss Computation Methods
+    # ====================================================================
+    
     def compute_reprojection_loss(self, pred, target):
-        """Computes reprojection loss between a batch of predicted and target images
+        """Compute reprojection loss between predicted and target images.
         
         Uses SSIM + L1 with configurable weights if SSIM is enabled,
         otherwise uses L1 only.
@@ -1232,30 +1365,66 @@ class Trainer:
         Note: This L1 loss is different from teacher-student L1 loss:
         - Reprojection L1: |reprojected_image - original_image|
         - Teacher-Student L1: |student_prediction - teacher_prediction|
+        
+        Args:
+            pred: Predicted reprojected images (B, 3, H, W)
+            target: Target original images (B, 3, H, W)
+            
+        Returns:
+            reprojection_loss: Combined SSIM + L1 loss (B, 1, H, W)
         """
         abs_diff = torch.abs(target - pred)
         reprojection_l1_loss = abs_diff.mean(1, True)
 
-        # 检查是否使用SSIM
+        # 检查是否使用SSIM和L1
         use_ssim = getattr(self.opt, 'use_reprojection_ssim', True)
+        use_l1 = getattr(self.opt, 'use_reprojection_l1', True)
         
+        # 如果两者都禁用，返回零损失
+        if not use_ssim and not use_l1:
+            return torch.zeros_like(reprojection_l1_loss)
+        
+        # 计算SSIM损失（如果启用）
+        ssim_loss = None
         if use_ssim and hasattr(self, 'ssim'):
             new_pred = pred * 5
             new_target = target * 5
             ssim_loss = self.ssim(new_pred, new_target).mean(1, True)
-            # 使用可配置的权重（不需要和为1）
+        
+        # 组合损失
+        loss_components = []
+        
+        if use_ssim and ssim_loss is not None:
             ssim_weight = getattr(self.opt, 'reprojection_ssim_weight', 0.85)
+            loss_components.append(ssim_weight * ssim_loss)
+        
+        if use_l1:
             l1_weight = getattr(self.opt, 'reprojection_l1_weight', 0.15)
-            reprojection_loss = ssim_weight * ssim_loss + l1_weight * reprojection_l1_loss
+            loss_components.append(l1_weight * reprojection_l1_loss)
+        
+        # 如果有损失组件，返回它们的和；否则返回零损失
+        if loss_components:
+            return sum(loss_components)
         else:
-            reprojection_loss = reprojection_l1_loss
-
-        return reprojection_loss            
+            return torch.zeros_like(reprojection_l1_loss)            
 
     
 
     def compute_losses(self, inputs, outputs):
-        """Compute the reprojection and smoothness losses for a minibatch
+        """Compute all losses for a minibatch.
+        
+        Computes:
+        1. Photometric loss (reprojection losses at three stages)
+        2. Smoothness loss (edge-aware regularization)
+        3. Plane regularization loss (geometric consistency)
+        4. Line regularization loss (geometric consistency)
+        
+        Args:
+            inputs: Input batch dictionary
+            outputs: Output dictionary from forward pass
+            
+        Returns:
+            losses: Dictionary containing all computed losses
         """
         losses = {}
         total_loss = 0
@@ -1369,10 +1538,23 @@ class Trainer:
         return losses
 
     def compute_depth_losses(self, inputs, outputs, losses):
-        """Compute depth metrics, to allow monitoring during training
-
-        This isn't particularly accurate as it averages over the entire batch,
-        so is only used to give an indication of validation performance
+        """Compute depth evaluation metrics for monitoring during training.
+        
+        Computes standard depth metrics:
+        - Absolute relative error (abs_rel)
+        - Squared relative error (sq_rel)
+        - RMSE (rms)
+        - Log RMSE (log_rms)
+        - Log10 error (log10)
+        - Accuracy metrics (a1, a2, a3)
+        
+        Note: This averages over the entire batch, so is mainly used for
+        monitoring validation performance rather than precise evaluation.
+        
+        Args:
+            inputs: Input batch dictionary (must contain "depth_gt")
+            outputs: Output dictionary (must contain depth predictions)
+            losses: Loss dictionary to update with metrics
         """
 
         depth_pred = outputs[("depth_ori", 0, 0)]
@@ -1404,8 +1586,18 @@ class Trainer:
             losses[metric] = np.array(depth_errors[i].cpu())
 
 
+    # ====================================================================
+    # Logging and Saving Methods
+    # ====================================================================
+    
     def log_time(self, batch_idx, duration, loss):
-        """Print a logging statement to the terminal
+        """Print training progress information to terminal.
+        
+        Displays:
+        - Current epoch and batch index
+        - Processing speed (examples/second)
+        - Current loss value
+        - Elapsed time and estimated time remaining
         """
         samples_per_sec = self.opt.batch_size / duration
         time_sofar = time.time() - self.start_time
@@ -1417,7 +1609,20 @@ class Trainer:
                                   sec_to_hm_str(time_sofar), sec_to_hm_str(training_time_left)))
 
     def log(self, mode, inputs, outputs, losses, outputs_mask=None):
-        """Write an event to the tensorboard events file
+        """Write training/validation metrics and images to tensorboard.
+        
+        Logs:
+        - All loss values as scalars
+        - Learning rate and gradient norm
+        - Input images, predicted images, depth/disparity maps
+        - Mask training visualizations (if enabled)
+        
+        Args:
+            mode: "train" or "val"
+            inputs: Input batch dictionary
+            outputs: Output dictionary
+            losses: Loss dictionary
+            outputs_mask: Optional mask training outputs
         """
         if self.debug_no_save or mode not in self.writers:
             return
@@ -1479,7 +1684,9 @@ class Trainer:
                         normalize_image(outputs[("predisp", s)][j]), self.step)
 
     def save_opts(self):
-        """Save options to disk so we know what we ran this experiment with
+        """Save training options to disk for experiment reproducibility.
+        
+        Saves all configuration options as JSON to the model directory.
         """
         if self.debug_no_save:
             return
@@ -1492,7 +1699,15 @@ class Trainer:
             json.dump(to_save, f, indent=2)
 
     def save_model(self):
-        """Save model weights to disk
+        """Save model weights and optimizer state to disk.
+        
+        Saves:
+        - All model state dicts (except teacher models)
+        - Optimizer state dict
+        - Model configuration (height, width for encoder)
+        
+        Note: Teacher models (e.g., depth_anything_v3_teacher) are excluded
+        as they are frozen and loaded from their original sources.
         """
         if self.debug_no_save:
             return
@@ -1522,7 +1737,14 @@ class Trainer:
         torch.save(self.model_optimizer.state_dict(), save_path)
 
     def load_model(self):
-        """Load model(s) from disk
+        """Load model weights and optimizer state from disk.
+        
+        Loads:
+        - Model state dicts for specified models
+        - Optimizer state dict (if available)
+        
+        Note: Teacher models are excluded as they are loaded from their
+        original sources, not from checkpoints.
         """
         self.opt.load_weights_folder = os.path.expanduser(self.opt.load_weights_folder)
 

@@ -190,12 +190,22 @@ class MonodepthOptions:
         #   - Reprojection L1: 重投影图像与原图像的L1距离（几何一致性）
         #   - Teacher-Student L1: 学生预测与教师预测的L1距离（知识蒸馏）
         # 影响：⚠️ SSIM在低对比度区域可能不够敏感，可能丢失细节
-        # 建议：可以调整权重比例，或通过--no-use_reprojection_ssim禁用SSIM，仅使用L1
+        # 建议：可以独立控制SSIM和L1的启用/禁用，调整权重比例
+        #    - 仅使用L1: --use_reprojection_l1 --no-use_reprojection_ssim
+        #    - 仅使用SSIM: --use_reprojection_ssim --no-use_reprojection_l1
+        #    - 两者都使用: --use_reprojection_ssim --use_reprojection_l1 (默认)
         
         self.parser.add_argument("--use_reprojection_ssim",
                                 help="enable SSIM in reprojection loss (default: True). "
-                                     "When enabled, uses reprojection_ssim_weight*SSIM + reprojection_l1_weight*L1. "
-                                     "When disabled, uses L1 only",
+                                     "When enabled with use_reprojection_l1, uses reprojection_ssim_weight*SSIM + reprojection_l1_weight*L1. "
+                                     "When disabled, uses L1 only (if use_reprojection_l1 is enabled)",
+                                action="store_true",
+                                default=True)
+        self.parser.add_argument("--use_reprojection_l1",
+                                help="enable L1 in reprojection loss (default: True). "
+                                     "When enabled with use_reprojection_ssim, uses reprojection_ssim_weight*SSIM + reprojection_l1_weight*L1. "
+                                     "When disabled, uses SSIM only (if use_reprojection_ssim is enabled). "
+                                     "If both are disabled, returns zero loss",
                                 action="store_true",
                                 default=True)
         self.parser.add_argument("--reprojection_ssim_weight",
