@@ -107,7 +107,7 @@ class MonodepthOptions:
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
-                                 default=20)
+                                 default=15)
 
         # ====================================================================
         # OPTIMIZATION & SCHEDULER (优化器和调度器配置)
@@ -159,7 +159,7 @@ class MonodepthOptions:
                                 default=True)
         self.parser.add_argument("--photometric_weight",
                                 type=float,
-                                default=0.2,
+                                default=0.5,
                                 help="overall weight for photometric reprojection loss. "
                                      "Lower (0.1-0.5) to focus more on teacher alignment, "
                                      "Higher (0.5-1.5) to balance geometry consistency")
@@ -170,7 +170,7 @@ class MonodepthOptions:
         
         self.parser.add_argument("--reprojection_ori_weight",
                                 type=float,
-                                default=0.25,
+                                default=0.5,
                                 help="weight for original reprojection loss (reprojection_losses_ori). "
                                      "Default: 0.25")
         self.parser.add_argument("--reprojection_virtual_weight",
@@ -237,7 +237,7 @@ class MonodepthOptions:
                                 default=True)
         self.parser.add_argument("--smoothness_weight",
                                 type=float,
-                                default=0.01,
+                                default=0.02,
                                 help="weight for smoothness loss (⚠️ high value smooths details). "
                                      "Recommended: 0.01-0.05 for detail preservation, 0.1-0.2 for balance")
         
@@ -396,7 +396,7 @@ class MonodepthOptions:
                                 default=True)
         self.parser.add_argument("--teacher_student_mse_weight",
                                 type=float,
-                                default=1.0,
+                                default=2.0,
                                 help="weight for MSE loss between teacher and student predictions. "
                                      "Recommended: 0.5-2.0. Used together with L1 loss for stronger alignment")
         
