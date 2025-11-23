@@ -343,7 +343,7 @@ class MonodepthOptions:
         self.parser.add_argument("--diffusion_steps",
                                 nargs="+",
                                 type=int,
-                                default=[20, 15, 12],  # 从[5,4,3]增加到[8,6,5]，增强细节
+                                default=[10, 8, 6],  # 从[5,4,3]增加到[8,6,5]，增强细节
                                 help="number of diffusion inference steps for each scale [coarse to fine]. "
                                      "More steps = better details but slower. "
                                      "Format: [scale_2, scale_1, scale_0] or [scale_0] for single scale")

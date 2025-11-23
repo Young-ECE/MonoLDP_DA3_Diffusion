@@ -65,15 +65,15 @@ class Trainer:
         self._build_depth_models()
         self._build_pose_models()
         
-        # Setup optimizer and scheduler
+        # Setup data loaders (needed for optimizer scheduler calculation)
+        self._setup_data_loaders()
+        
+        # Setup optimizer and scheduler (now has access to num_total_steps and train_loader)
         self._setup_optimizer()
         
-        # Load pretrained weights if specified
+        # Load pretrained weights if specified (after optimizer setup, so optimizer state can be loaded)
         if self.opt.load_weights_folder is not None:
             self.load_model()
-        
-        # Setup data loaders
-        self._setup_data_loaders()
         
         # Setup loss computation layers
         self._setup_loss_layers()
