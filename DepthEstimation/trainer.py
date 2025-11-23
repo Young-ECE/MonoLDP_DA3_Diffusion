@@ -691,78 +691,113 @@ class Trainer:
         # ====================================================================
         # TEACHER-STUDENT ALIGNMENT LOSSES (学生-教师对齐损失)
         # ====================================================================
+        # 为每个scale单独计算对齐损失，以便后续可以分配到每个scale的loss中
         
-        # Teacher-Student L1损失：学生与教师的一致性（基础对齐损失）
-        # 注意：这是知识蒸馏损失，与重投影L1损失不同
         use_l1_loss = getattr(self.opt, 'use_teacher_student_l1', True)
-        teacher_student_l1_loss = 0
-        if use_l1_loss:
-            for scale in self.opt.scales:
-                teacher_student_l1_loss += F.l1_loss(outputs[("predisp", scale)], outputs[("disp", scale)])
-            losses['teacher_student_l1'] = teacher_student_l1_loss / len(self.opt.scales)
-        else:
-            losses['teacher_student_l1'] = torch.tensor(0.0).to(self.device)
-        
-        # MSE损失：学生与教师的一致性（更强调大误差，有助于快速收敛）
         use_mse_loss = getattr(self.opt, 'use_teacher_student_mse', True)
-        mse_loss = 0
-        if use_mse_loss:
-            for scale in self.opt.scales:
-                mse_loss += F.mse_loss(outputs[("predisp", scale)], outputs[("disp", scale)])
-            losses['mse'] = mse_loss / len(self.opt.scales)
-        else:
-            losses['mse'] = torch.tensor(0.0).to(self.device)
-        
-        # SSIM损失：学生与教师的结构相似性（关注整体结构一致性）
         use_ssim_loss = getattr(self.opt, 'use_teacher_student_ssim', True)
-        ssim_loss = 0
-        if use_ssim_loss and hasattr(self, 'ssim'):
-            for scale in self.opt.scales:
-                teacher_disp = outputs[("predisp", scale)]
-                student_disp = outputs[("disp", scale)]
-                # SSIM损失（1 - SSIM），值越小表示越相似
-                ssim_val = self.ssim(teacher_disp * 5, student_disp * 5).mean()
-                ssim_loss += ssim_val
-            losses['ssim_teacher_student'] = ssim_loss / len(self.opt.scales)
-        else:
-            losses['ssim_teacher_student'] = torch.tensor(0.0).to(self.device)
-        
-        # ====================================================================
-        # DIFFUSION MODEL LOSSES (扩散模型损失)
-        # ====================================================================
-        
-        # DDIM损失：扩散模型的去噪损失
         use_ddim_loss = getattr(self.opt, 'use_ddim_loss', True)
-        ddim_loss = 0
-        if use_ddim_loss:
-            for scale in self.opt.scales:
-                if ("ddim_loss", scale) in outputs:
-                    ddim_loss += outputs[("ddim_loss", scale)]
-            losses['ddim'] = ddim_loss / len(self.opt.scales) if ddim_loss != 0 else torch.tensor(0.0).to(self.device)
-        else:
-            losses['ddim'] = torch.tensor(0.0).to(self.device)
-        
-        # ====================================================================
-        # TOTAL LOSS COMPUTATION (总损失计算)
-        # ====================================================================
-        
-        # 保存原始光度损失
-        losses['photometric'] = losses["loss"].clone()
-        
-        # 总损失 = 光度损失 + L1损失 + MSE损失 + SSIM损失 + DDIM损失
-        # 注意：增加对齐损失权重有助于学生模型更好跟随教师模型
         use_photometric_loss = getattr(self.opt, 'use_photometric_loss', True)
+        
+        # 获取权重配置
         photometric_weight = getattr(self.opt, 'photometric_weight', 0.2) if use_photometric_loss else 0.0
         l1_weight = getattr(self.opt, 'teacher_student_l1_weight', 5.0) if use_l1_loss else 0.0
         mse_weight = getattr(self.opt, 'teacher_student_mse_weight', 1.0) if use_mse_loss else 0.0
         ssim_weight = getattr(self.opt, 'teacher_student_ssim_weight', 1.0) if use_ssim_loss else 0.0
         ddim_weight = getattr(self.opt, 'diffusion_ddim_weight', 1.0) if use_ddim_loss else 0.0
         
-        losses["loss"] = (photometric_weight * losses['photometric'] + 
-                         l1_weight * losses['teacher_student_l1'] + 
-                         mse_weight * losses['mse'] +
-                         ssim_weight * losses['ssim_teacher_student'] +
-                         ddim_weight * losses['ddim'])
+        # 保存原始光度损失（包含photometric + smoothness + plane + line）
+        losses['photometric'] = losses["loss"].clone()
+        
+        # 为每个scale计算teacher-student对齐损失和DDIM损失
+        # 初始化为tensor，确保类型一致性
+        teacher_student_l1_loss_total = torch.tensor(0.0).to(self.device)
+        mse_loss_total = torch.tensor(0.0).to(self.device)
+        ssim_loss_total = torch.tensor(0.0).to(self.device)
+        ddim_loss_total = torch.tensor(0.0).to(self.device)
+        
+        # 存储每个scale的对齐损失和DDIM损失
+        scale_teacher_student_losses = {}
+        
+        for scale in self.opt.scales:
+            scale_alignment_loss = torch.tensor(0.0).to(self.device)
+            
+            # Teacher-Student L1损失（每个scale）
+            if use_l1_loss:
+                l1_loss_scale = F.l1_loss(outputs[("predisp", scale)], outputs[("disp", scale)])
+                losses['teacher_student_l1/{}'.format(scale)] = l1_loss_scale
+                teacher_student_l1_loss_total += l1_loss_scale
+                scale_alignment_loss = scale_alignment_loss + l1_weight * l1_loss_scale
+            else:
+                losses['teacher_student_l1/{}'.format(scale)] = torch.tensor(0.0).to(self.device)
+            
+            # MSE损失（每个scale）
+            if use_mse_loss:
+                mse_loss_scale = F.mse_loss(outputs[("predisp", scale)], outputs[("disp", scale)])
+                losses['mse/{}'.format(scale)] = mse_loss_scale
+                mse_loss_total += mse_loss_scale
+                scale_alignment_loss = scale_alignment_loss + mse_weight * mse_loss_scale
+            else:
+                losses['mse/{}'.format(scale)] = torch.tensor(0.0).to(self.device)
+            
+            # SSIM损失（每个scale）
+            if use_ssim_loss and hasattr(self, 'ssim'):
+                teacher_disp = outputs[("predisp", scale)]
+                student_disp = outputs[("disp", scale)]
+                ssim_val = self.ssim(teacher_disp * 5, student_disp * 5).mean()
+                losses['ssim_teacher_student/{}'.format(scale)] = ssim_val
+                ssim_loss_total += ssim_val
+                scale_alignment_loss = scale_alignment_loss + ssim_weight * ssim_val
+            else:
+                losses['ssim_teacher_student/{}'.format(scale)] = torch.tensor(0.0).to(self.device)
+            
+            # DDIM损失（每个scale）
+            if use_ddim_loss and ("ddim_loss", scale) in outputs:
+                ddim_loss_scale = outputs[("ddim_loss", scale)]
+                losses['ddim/{}'.format(scale)] = ddim_loss_scale
+                ddim_loss_total += ddim_loss_scale
+                scale_alignment_loss = scale_alignment_loss + ddim_weight * ddim_loss_scale
+            else:
+                losses['ddim/{}'.format(scale)] = torch.tensor(0.0).to(self.device)
+            
+            # 保存每个scale的对齐损失总和
+            scale_teacher_student_losses[scale] = scale_alignment_loss
+        
+        # 计算所有scale的平均值（用于记录和分析）
+        losses['teacher_student_l1'] = teacher_student_l1_loss_total / len(self.opt.scales) if use_l1_loss else torch.tensor(0.0).to(self.device)
+        losses['mse'] = mse_loss_total / len(self.opt.scales) if use_mse_loss else torch.tensor(0.0).to(self.device)
+        losses['ssim_teacher_student'] = ssim_loss_total / len(self.opt.scales) if use_ssim_loss else torch.tensor(0.0).to(self.device)
+        losses['ddim'] = ddim_loss_total / len(self.opt.scales) if use_ddim_loss else torch.tensor(0.0).to(self.device)
+        
+        # ====================================================================
+        # TOTAL LOSS COMPUTATION (总损失计算)
+        # ====================================================================
+        # 更新每个scale的loss，使其包含所有损失组件
+        total_loss_all_scales = torch.tensor(0.0).to(self.device)
+        
+        for scale in self.opt.scales:
+            # 每个scale的完整损失 = photometric_weight * photometric_loss + 对齐损失
+            # 注意：losses["loss/{}".format(scale)] 已经包含了photometric + smoothness + plane + line
+            # 但是这里的photometric_weight只应用到photometric部分
+            # 我们需要计算加权后的完整损失
+            
+            # 获取该scale的原始损失（photometric + smoothness + plane + line）
+            scale_photometric_loss = losses["loss/{}".format(scale)]
+            
+            # 构建完整的scale损失
+            # 由于photometric_loss已经包含了所有reprojection、smoothness、plane、line损失
+            # 我们需要应用photometric_weight，然后加上对齐损失
+            scale_complete_loss = (
+                photometric_weight * scale_photometric_loss +
+                scale_teacher_student_losses[scale]
+            )
+            
+            # 更新该scale的loss
+            losses["loss/{}".format(scale)] = scale_complete_loss
+            total_loss_all_scales += scale_complete_loss
+        
+        # 总损失 = 所有scale损失的平均值
+        losses["loss"] = total_loss_all_scales / len(self.opt.scales)
         
         # 记录各损失项的独立值，方便分析
         losses['loss_photometric'] = losses['photometric']
