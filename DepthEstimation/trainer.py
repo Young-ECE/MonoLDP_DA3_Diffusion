@@ -249,16 +249,26 @@ class Trainer:
             self.opt.learning_rate, 
             weight_decay=weight_decay)
         
-        # Setup learning rate scheduler
-        if getattr(self.opt, 'use_cosine_scheduler', False):
+        # Setup learning rate scheduler (default: CosineAnnealingLR)
+        use_step_scheduler = getattr(self.opt, 'use_step_scheduler', False)
+        use_cosine_scheduler = getattr(self.opt, 'use_cosine_scheduler', True)
+        
+        # use_step_scheduler overrides use_cosine_scheduler
+        if use_step_scheduler:
+            # StepLR scheduler (improved: larger step_size, smaller gamma)
+            step_size = max(self.opt.scheduler_step_size, 30)  # At least 30 epochs
+            gamma = getattr(self.opt, 'scheduler_gamma', 0.5)  # Default 0.5 instead of 0.1
+            self.model_lr_scheduler = optim.lr_scheduler.StepLR(
+                self.model_optimizer, step_size, gamma)
+        elif use_cosine_scheduler:
             # Cosine annealing scheduler (smoother decay)
             T_max = self.opt.num_epochs * self.num_total_steps // len(self.train_loader)
             self.model_lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(
                 self.model_optimizer, T_max=T_max, eta_min=1e-6)
         else:
-            # StepLR scheduler (improved: larger step_size, smaller gamma)
-            step_size = max(self.opt.scheduler_step_size, 30)  # At least 30 epochs
-            gamma = getattr(self.opt, 'scheduler_gamma', 0.5)  # Default 0.5 instead of 0.1
+            # Fallback to StepLR if both are False (shouldn't happen with defaults)
+            step_size = max(self.opt.scheduler_step_size, 30)
+            gamma = getattr(self.opt, 'scheduler_gamma', 0.5)
             self.model_lr_scheduler = optim.lr_scheduler.StepLR(
                 self.model_optimizer, step_size, gamma)
     

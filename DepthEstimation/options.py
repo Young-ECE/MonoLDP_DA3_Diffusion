@@ -51,7 +51,7 @@ class MonodepthOptions:
                                  nargs="+",
                                  type=int,
                                  help="scales used in the loss",
-                                 default=[0])
+                                 default=[0,1,2])
         self.parser.add_argument("--min_depth",
                                  type=float,
                                  help="minimum depth",
@@ -107,7 +107,7 @@ class MonodepthOptions:
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
-                                 default=15)
+                                 default=20)
 
         # ====================================================================
         # OPTIMIZATION & SCHEDULER (优化器和调度器配置)
@@ -129,8 +129,13 @@ class MonodepthOptions:
                                  help="gamma (decay factor) of the scheduler",
                                  default=0.5)  # 从0.1改为0.5，更平滑的衰减
         self.parser.add_argument("--use_cosine_scheduler",
-                                 help="use cosine annealing scheduler instead of step scheduler",
-                                 action="store_true")
+                                 help="use cosine annealing scheduler instead of step scheduler (default: True)",
+                                 action="store_true",
+                                 default=True)
+        self.parser.add_argument("--use_step_scheduler",
+                                 help="use step scheduler instead of cosine scheduler (overrides --use_cosine_scheduler)",
+                                 action="store_true",
+                                 default=False)
         self.parser.add_argument("--max_grad_norm",
                                  type=float,
                                  help="maximum gradient norm for clipping",
@@ -305,7 +310,7 @@ class MonodepthOptions:
                                 default=True)
         self.parser.add_argument("--diffusion_ddim_weight",
                                 type=float,
-                                default=1.0,
+                                default=0.5,
                                 help="weight for DDIM diffusion loss (denoising loss). "
                                      "✅ Helps preserve details. "
                                      "Recommended: 0.5-2.0. Lower if focusing more on teacher alignment")
@@ -411,7 +416,7 @@ class MonodepthOptions:
                                 default=True)
         self.parser.add_argument("--teacher_student_ssim_weight",
                                 type=float,
-                                default=1.0,
+                                default=2.0,
                                 help="weight for SSIM loss between teacher and student predictions. "
                                      "Recommended: 0.5-2.0. Helps align structural similarity")
         
