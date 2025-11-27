@@ -15,6 +15,7 @@ from PIL import Image  # using pillow-simd for increased speed
 import torch
 import torch.utils.data as data
 from torchvision import transforms
+from PIL import Image
 
 
 def pil_loader(path):
@@ -555,6 +556,18 @@ class MonoDataset(data.Dataset):
         # Step 3: Preprocess geometric data for each scale
         for scale in range(self.num_scales):
             self._preprocess_geometric_data(inputs, scale)
+        
+        # Step 4: In test mode, also process native resolution (-1) geometric data
+        # This matches MonoLDP's behavior where -1 versions are kept in test mode
+        if self.is_test:
+            for struct_type in ["plane", "line"]:
+                struct_key = (struct_type, 0, -1)
+                if struct_key in inputs:
+                    # Convert to numpy array
+                    struct_map_array = np.expand_dims(np.array(inputs[struct_key]), 0)
+                    # Store both float and long versions (matching MonoLDP)
+                    inputs[(struct_type + "_float", 0, -1)] = torch.from_numpy(struct_map_array).float()
+                    inputs[(struct_type, 0, -1)] = torch.from_numpy(struct_map_array).long()
 
     def _cleanup_native_resolution(self, inputs):
         """Remove native resolution (-1) data that's no longer needed.
@@ -567,11 +580,22 @@ class MonoDataset(data.Dataset):
             key = ("color", frame_id, -1)
             if key in inputs:
                 if self.is_test:
-                    inputs[key] = self.to_tensor(inputs[key])
+                    # 确保 PIL Image 被正确转换为 tensor
+                    # 使用 transforms.ToTensor() 直接转换，避免序列化问题
+                    if isinstance(inputs[key], Image.Image):
+                        # 直接使用 transforms.ToTensor() 转换，避免使用 self.to_tensor（可能序列化问题）
+                        to_tensor = transforms.ToTensor()
+                        inputs[key] = to_tensor(inputs[key])
+                    elif not isinstance(inputs[key], torch.Tensor):
+                        # 如果不是 PIL Image 也不是 Tensor，尝试转换
+                        to_tensor = transforms.ToTensor()
+                        inputs[key] = to_tensor(inputs[key])
                 else:
                     del inputs[key]
 
         # Remove native resolution geometric data (not needed after preprocessing)
+        # 注意：在测试模式下，plane 和 line 的 -1 版本会被保留并转换为 tensor（在 preprocess 中处理）
+        # 在非测试模式下，删除 -1 版本（只保留 scale 0, 1, 2... 的版本）
         if self.load_plane and not self.is_test:
             if ("plane", 0, -1) in inputs:
                 del inputs[("plane", 0, -1)]
@@ -649,6 +673,21 @@ class MonoDataset(data.Dataset):
 
         # Cleanup native resolution data
         self._cleanup_native_resolution(inputs)
+        
+        # 额外检查：确保在测试模式下，所有 ("color", i, -1) 都是 tensor
+        # 这在多进程环境下特别重要
+        if self.is_test:
+            for frame_id in self.frame_idxs:
+                key = ("color", frame_id, -1)
+                if key in inputs:
+                    if isinstance(inputs[key], Image.Image):
+                        # 如果仍然是 PIL Image，强制转换
+                        to_tensor = transforms.ToTensor()
+                        inputs[key] = to_tensor(inputs[key])
+                    elif not isinstance(inputs[key], torch.Tensor):
+                        # 如果不是 tensor，也转换
+                        to_tensor = transforms.ToTensor()
+                        inputs[key] = to_tensor(inputs[key])
 
         # Add stereo extrinsics if needed
         self._add_stereo_extrinsics(inputs, side, do_flip)

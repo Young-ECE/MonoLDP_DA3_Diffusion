@@ -528,9 +528,22 @@ class MonodepthOptions:
                                  help="if set will output the disparities to this folder",
                                  type=str)
         self.parser.add_argument("--post_process",
-                                 help="if set will perform the flipping post processing "
-                                      "from the original monodepth paper",
-                                 action="store_true")
+                                help="if set will perform the flipping post processing "
+                                     "from the original monodepth paper",
+                                action="store_true")
+        
+        # ====================================================================
+        # DA3Mono-Large EVALUATION OPTIONS (DA3Mono-Large 评估配置)
+        # ====================================================================
+        self.parser.add_argument("--da3_model_path",
+                                type=str,
+                                default=None,
+                                help="local path to DA3Mono-Large model. "
+                                     "If not specified, will load from HuggingFace")
+        self.parser.add_argument("--use_fixed_max_depth",
+                                help="if set, use fixed MAX_DEPTH=10.0 for all images instead of estimating from predictions",
+                                action="store_true",
+                                default=False)
 
     def parse(self):
         self.options = self.parser.parse_args()

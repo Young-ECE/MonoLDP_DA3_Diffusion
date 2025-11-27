@@ -44,11 +44,10 @@ python evaluate_nyu_depth.py \
   --scales 0
 ```
 
-## 单张图像推理
+## DA3模型路径
+/home/jingyang/.cache/
 
-```bash
-cd DepthEstimation
-python inference_single_image.py \
-  --image_path <图像路径> \
-  --load_weights_folder <模型权重路径>
+/home/jingyang/.cache/depth_anything_3
 ```
+
+/home/jingyang/.cache/huggingface/hub/models--depth-anything--DA3MONO-LARGE/snapshots/f465978e618db8cc79c83b8bbf24964857db1875
