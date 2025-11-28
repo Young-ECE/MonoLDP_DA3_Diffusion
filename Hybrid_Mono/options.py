@@ -292,12 +292,7 @@ class MonodepthOptions:
         # ====================================================================
         # DIFFUSION MODEL CONFIGURATION (扩散模型配置)
         # ====================================================================
-        # Note: Diffusion decoder is always used, this flag is kept for backward compatibility
-        
-        self.parser.add_argument("--use_diffusion",
-                                help="[DEPRECATED] Diffusion is always enabled",
-                                action="store_true",
-                                default=True)
+        # Note: Diffusion decoder is always used
         
         # DDIM Loss (Denoising Diffusion Implicit Model Loss)
         # 作用：扩散模型的去噪损失，训练噪声预测网络
@@ -354,10 +349,6 @@ class MonodepthOptions:
         # Note: Depth Anything V3 is always used as teacher model
         
         # Teacher Model Settings (教师模型设置)
-        self.parser.add_argument("--use_depth_anything_v3",
-                                help="[DEPRECATED] Depth Anything V3 is always used as teacher",
-                                action="store_true",
-                                default=True)
         self.parser.add_argument("--depth_anything_v3_model",
                                 type=str,
                                 help="Depth Anything V3 model name",
@@ -366,7 +357,7 @@ class MonodepthOptions:
         self.parser.add_argument("--depth_anything_v3_weights",
                                 type=str,
                                 help="path to Depth Anything V3 model directory (optional, will auto-download from HuggingFace if not provided)",
-                                default=None)
+                                default="/home/jingyang/.cache/huggingface/hub/models--depth-anything--DA3MONO-LARGE/snapshots/f465978e618db8cc79c83b8bbf24964857db1875")
         
         # Teacher-Student Alignment Losses (学生-教师对齐损失)
         # 用于知识蒸馏，使学生模型输出逼近教师模型
@@ -468,20 +459,6 @@ class MonodepthOptions:
                                  default=12)
 
         # ====================================================================
-        # MODEL LOADING OPTIONS (模型加载配置)
-        # ====================================================================
-        self.parser.add_argument("--load_weights_folder",
-                                type=str,
-                                help="name of model to load (for resuming training or evaluation). "
-                                     "Set to None or don't specify for training from scratch.",
-                                default=None)
-        self.parser.add_argument("--models_to_load",
-                                 nargs="+",
-                                 type=str,
-                                 help="models to load (for evaluation: encoder, depth, scalenet, regression)",
-                                 default=["encoder", "depth", "scalenet", "regression"])
-
-        # ====================================================================
         # LOGGING & DEBUGGING OPTIONS (日志和调试配置)
         # ====================================================================
         self.parser.add_argument("--log_frequency",
@@ -534,11 +511,31 @@ class MonodepthOptions:
                                 action="store_true")
         
         # ====================================================================
-        # DA3Mono-Large EVALUATION OPTIONS (DA3Mono-Large 评估配置)
+        # STUDENT MODEL EVALUATION OPTIONS (学生模型评估配置)
+        # ====================================================================
+        # 用于评估训练好的学生模型（ResNet + Diffusion Decoder）
+        self.parser.add_argument("--load_weights_folder",
+                                type=str,
+                                help="path to student model weights folder (for evaluation). "
+                                     "Should contain: encoder.pth, depth.pth, scalenet.pth, regression.pth. "
+                                     "For training from scratch, set to None or don't specify.",
+                                default="/oldisk/home/jingyang/monoldp/temp/monoldp_diffusion_model_20251123_234053/models/weights_19") 
+        self.parser.add_argument("--models_to_load",
+                                 nargs="+",
+                                 type=str,
+                                 help="student models to load (for evaluation: encoder, depth, scalenet, regression)",
+                                 default=["encoder", "depth", "scalenet", "regression"])
+        self.parser.add_argument("--use_least_squares",
+                                help="use least squares alignment (scale + shift) instead of median scaling for evaluation",
+                                action="store_true",
+                                default=True)
+        
+        # ====================================================================
+        # DA3Mono-Large EVALUATION OPTIONS (DA3Mono-Large 教师模型评估配置)
         # ====================================================================
         self.parser.add_argument("--da3_model_path",
                                 type=str,
-                                default=None,
+                                default="/home/jingyang/.cache/huggingface/hub/models--depth-anything--DA3MONO-LARGE/snapshots/f465978e618db8cc79c83b8bbf24964857db1875",
                                 help="local path to DA3Mono-Large model. "
                                      "If not specified, will load from HuggingFace")
         self.parser.add_argument("--use_fixed_max_depth",
