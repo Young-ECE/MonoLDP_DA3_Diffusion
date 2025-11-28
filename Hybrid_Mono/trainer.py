@@ -262,7 +262,8 @@ class Trainer:
                 self.model_optimizer, step_size, gamma)
         elif use_cosine_scheduler:
             # Cosine annealing scheduler (smoother decay)
-            T_max = self.opt.num_epochs * self.num_total_steps // len(self.train_loader)
+            # Note: scheduler.step() is called once per epoch, so T_max should be num_epochs
+            T_max = self.opt.num_epochs
             self.model_lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(
                 self.model_optimizer, T_max=T_max, eta_min=1e-6)
         else:
@@ -515,9 +516,13 @@ class Trainer:
     # ====================================================================
     
     def set_train(self):
-        """Convert all models to training mode."""
-        for m in self.models.values():
-            m.train()
+        """Convert all models to training mode (except teacher model which should stay in eval mode)."""
+        for name, m in self.models.items():
+            # Teacher model should always stay in eval mode (frozen)
+            if name == "depth_anything_v3_teacher":
+                m.eval()
+            else:
+                m.train()
 
     def set_eval(self):
         """Convert all models to testing/evaluation mode."""
@@ -710,7 +715,7 @@ class Trainer:
         use_photometric_loss = getattr(self.opt, 'use_photometric_loss', True)
         
         # 获取权重配置
-        photometric_weight = getattr(self.opt, 'photometric_weight', 0.2) if use_photometric_loss else 0.0
+        photometric_weight = getattr(self.opt, 'photometric_weight', 0.5) if use_photometric_loss else 0.0
         l1_weight = getattr(self.opt, 'teacher_student_l1_weight', 5.0) if use_l1_loss else 0.0
         mse_weight = getattr(self.opt, 'teacher_student_mse_weight', 1.0) if use_mse_loss else 0.0
         ssim_weight = getattr(self.opt, 'teacher_student_ssim_weight', 1.0) if use_ssim_loss else 0.0
@@ -1472,10 +1477,10 @@ class Trainer:
             losses: Dictionary containing all computed losses
         """
         losses = {}
-        total_loss = 0
+        total_loss = torch.tensor(0.0).to(self.device)
 
         for scale in self.opt.scales:
-            loss = 0
+            loss = torch.tensor(0.0).to(self.device)
 
             disp = outputs[("disp", scale)]
             color = inputs[("color", 0, scale)]

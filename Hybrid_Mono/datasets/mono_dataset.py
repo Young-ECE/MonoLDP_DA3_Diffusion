@@ -15,7 +15,6 @@ from PIL import Image  # using pillow-simd for increased speed
 import torch
 import torch.utils.data as data
 from torchvision import transforms
-from PIL import Image
 
 
 def pil_loader(path):

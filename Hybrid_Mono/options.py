@@ -471,9 +471,10 @@ class MonodepthOptions:
         # MODEL LOADING OPTIONS (模型加载配置)
         # ====================================================================
         self.parser.add_argument("--load_weights_folder",
-                                 type=str,
-                                 help="name of model to load",
-                                 default="/oldisk/home/jingyang/monoldp/temp/monoldp_diffusion_model_20251123_234053/models/weights_19")
+                                type=str,
+                                help="name of model to load (for resuming training or evaluation). "
+                                     "Set to None or don't specify for training from scratch.",
+                                default=None)
         self.parser.add_argument("--models_to_load",
                                  nargs="+",
                                  type=str,
