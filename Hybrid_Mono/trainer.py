@@ -1585,6 +1585,11 @@ class Trainer:
     def compute_depth_losses(self, inputs, outputs, losses):
         """Compute depth evaluation metrics for monitoring during training.
         
+        Computes standard depth metrics using the same logic as evaluation script:
+        - Uses per-image global_depth (from scalenet + regression heads)
+        - Uses Least Squares alignment (Scale + Shift) instead of Median Scaling
+        - Uses MIN_DEPTH = 1e-3 and per-image max_depth for mask generation
+        
         Computes standard depth metrics:
         - Absolute relative error (abs_rel)
         - Squared relative error (sq_rel)
@@ -1601,34 +1606,94 @@ class Trainer:
             outputs: Output dictionary (must contain depth predictions)
             losses: Loss dictionary to update with metrics
         """
-
+        # 获取预测深度
         depth_pred = outputs[("depth_ori", 0, 0)]
         depth_pred = torch.clamp(F.interpolate(
             depth_pred, [self.dataset.full_res_shape[1], self.dataset.full_res_shape[0]],
             mode="bilinear", align_corners=False), self.dataset.min_depth, self.dataset.max_depth)
-        
-        
         depth_pred = depth_pred.detach()
 
         depth_gt = inputs["depth_gt"]
-        mask = depth_gt > 0
+        B = depth_gt.shape[0]
+        
+        # 获取每张图像的 global_depth（与评估脚本一致）
+        # 重新计算 features 和 global_depth（因为 outputs 中可能没有保存）
+        with torch.no_grad():
+            features = self.models["encoder"](inputs[("color_aug", 0, 0)])
+            depth_factors = self.models["scalenet"](features)
+            scale_predictions = [head(factor) for head, factor in zip(self.models["regression"], depth_factors)]
+            max_depth = torch.mean(torch.stack(scale_predictions), dim=0)  # (B,)
 
-        # garg/eigen crop
-        crop_mask = torch.zeros_like(mask)
-        crop_mask[:, :, self.dataset.default_crop[2]:self.dataset.default_crop[3], \
-        self.dataset.default_crop[0]:self.dataset.default_crop[1]] = 1
-        mask = mask * crop_mask
-
-        depth_gt = depth_gt[mask]
-        depth_pred = depth_pred[mask]
-        depth_pred *= torch.median(depth_gt) / torch.median(depth_pred)
-
-        depth_pred = torch.clamp(depth_pred, min=self.dataset.min_depth, max=self.dataset.max_depth)
-
-        depth_errors = compute_depth_errors(depth_gt, depth_pred)
-
+        # 使用与评估脚本相同的 MIN_DEPTH
+        MIN_DEPTH = 1e-3
+        
+        # 使用与评估脚本相同的 Crop 区域 [45, 471, 41, 601]
+        # 注意：评估脚本使用的是绝对坐标，而 dataset.default_crop 考虑了 edge_crop
+        # 为了保持一致，使用评估脚本的硬编码值
+        crop = [45, 471, 41, 601]  # [y_start, y_end, x_start, x_end]
+        
+        all_errors = []
+        
+        # 逐图像处理（与评估脚本一致）
+        for i in range(B):
+            depth_pred_i = depth_pred[i, 0]  # (H, W)
+            depth_gt_i = depth_gt[i, 0]  # (H, W)
+            max_depth_i = max_depth[i].item()
+            
+            # 生成有效区域 Mask（与评估脚本一致）
+            mask = (depth_gt_i > MIN_DEPTH) & (depth_gt_i < max_depth_i)
+            
+            # Eigen Crop (NYU 标准裁剪)
+            crop_mask = torch.zeros_like(mask, dtype=torch.bool)
+            crop_mask[crop[0]:crop[1], crop[2]:crop[3]] = True
+            mask = mask & crop_mask
+            
+            depth_gt_valid = depth_gt_i[mask]
+            depth_pred_valid = depth_pred_i[mask]
+            
+            if len(depth_gt_valid) == 0:
+                continue
+            
+            # 对齐策略：使用 Least Squares (Scale + Shift)（与评估脚本一致）
+            # 构建线性方程组: gt = scale * pred + shift
+            # A = [pred, 1], x = [scale, shift], b = gt
+            pred_stack = torch.stack([depth_pred_valid, torch.ones_like(depth_pred_valid)], dim=1)  # (N, 2)
+            gt_valid = depth_gt_valid.unsqueeze(1)  # (N, 1)
+            
+            # 使用 torch.linalg.lstsq 求解（与评估脚本一致）
+            try:
+                # PyTorch 1.9+ 支持 torch.linalg.lstsq
+                result = torch.linalg.lstsq(pred_stack, gt_valid)
+                coeffs = result.solution  # (2, 1)
+                if coeffs.dim() > 1:
+                    coeffs = coeffs.squeeze(1)  # (2,)
+            except (AttributeError, RuntimeError):
+                # 兼容旧版本 PyTorch 或处理奇异矩阵，使用伪逆
+                coeffs = torch.pinverse(pred_stack) @ gt_valid  # (2, 1)
+                if coeffs.dim() > 1:
+                    coeffs = coeffs.squeeze(1)  # (2,)
+            
+            scale, shift = coeffs[0].item(), coeffs[1].item()
+            depth_pred_aligned = depth_pred_valid * scale + shift
+            
+            # 截断预测值防止溢出（使用每张图像的 global_depth）
+            depth_pred_aligned = torch.clamp(depth_pred_aligned, min=MIN_DEPTH, max=max_depth_i)
+            
+            # 计算误差
+            depth_errors = compute_depth_errors(depth_gt_valid, depth_pred_aligned)
+            all_errors.append([e.item() if isinstance(e, torch.Tensor) else e for e in depth_errors])
+        
+        if len(all_errors) == 0:
+            # 如果没有有效样本，返回零值
+            for i, metric in enumerate(self.depth_metric_names):
+                losses[metric] = 0.0
+            return
+        
+        # 平均所有图像的误差
+        mean_errors = np.array(all_errors).mean(0)
+        
         for i, metric in enumerate(self.depth_metric_names):
-            losses[metric] = np.array(depth_errors[i].cpu())
+            losses[metric] = mean_errors[i]
 
 
     # ====================================================================

@@ -107,7 +107,7 @@ class MonodepthOptions:
         self.parser.add_argument("--num_epochs",
                                  type=int,
                                  help="number of epochs",
-                                 default=20)
+                                 default=15)
 
         # ====================================================================
         # OPTIMIZATION & SCHEDULER (优化器和调度器配置)
@@ -473,12 +473,12 @@ class MonodepthOptions:
         self.parser.add_argument("--load_weights_folder",
                                  type=str,
                                  help="name of model to load",
-                                 default="/oldisk/home/jingyang/monoldp/temp/mdp_20251106_205450/models/weights_14")
+                                 default="/oldisk/home/jingyang/monoldp/temp/monoldp_diffusion_model_20251123_234053/models/weights_19")
         self.parser.add_argument("--models_to_load",
                                  nargs="+",
                                  type=str,
-                                 help="models to load",
-                                 default=["encoder", "depth", "pose_encoder", "pose", "scalenet", "regression"])
+                                 help="models to load (for evaluation: encoder, depth, scalenet, regression)",
+                                 default=["encoder", "depth", "scalenet", "regression"])
 
         # ====================================================================
         # LOGGING & DEBUGGING OPTIONS (日志和调试配置)

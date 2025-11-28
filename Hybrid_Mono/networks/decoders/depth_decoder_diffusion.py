@@ -221,14 +221,10 @@ class DepthDecoderDiffusion(nn.Module):
                 f_upsampled = F.interpolate(f, scale_factor=2, mode='bilinear', align_corners=False)
                 conditions[str(i)] = f_upsampled
         
-        # If no GT provided (inference mode), generate initial prediction
-        if gt is None:
-            raise RuntimeError(
-                "DepthDecoderDiffusion requires teacher-provided targets during forward. "
-                "Please supply `gt` when using the diffusion decoder."
-            )
+        # Check if we're in inference mode (no GT provided)
+        is_inference = (gt is None)
         
-        # Diffusion refinement (training mode with GT)
+        # Diffusion refinement (training mode with GT) or generation (inference mode without GT)
         # Process scales from coarsest to finest (2 -> 1 -> 0)
         refined_depths = {}
         condition_inputs = {}
@@ -242,8 +238,16 @@ class DepthDecoderDiffusion(nn.Module):
             scale_key = str(scale)
             condition = conditions[scale_key]
             
-            # Ensure condition feature matches GT spatial resolution
-            target_shape = gt[("disp_diffusion", scale)].shape[-3:]
+            # Get target shape: from GT if available, otherwise from condition
+            if is_inference:
+                # Inference mode: use condition feature shape to determine output shape
+                # condition shape is (B, C, H, W), output should be (B, num_output_channels, H, W)
+                B, C, H, W = condition.shape
+                target_shape = (self.num_output_channels, H, W)
+            else:
+                # Training mode: use GT shape
+                target_shape = gt[("disp_diffusion", scale)].shape[-3:]
+            
             condition = self._resize_to(condition, target_shape[-2:])
             cond_input = condition
 
@@ -292,15 +296,20 @@ class DepthDecoderDiffusion(nn.Module):
 
         self.outputs["re-diffusion"] = diffusion_traces
 
-        # Compute DDIM losses
-        for scale in self.scales:
-            scale_key = str(scale)
-            ddim_loss = self._compute_ddim_loss(
-                scale_key=scale_key,
-                gt_depth=gt[("disp_diffusion", scale)],
-                condition_input=condition_inputs[scale_key]
-            )
-            self.outputs[("ddim_loss", scale)] = ddim_loss
+        # Compute DDIM losses (only in training mode when GT is available)
+        if not is_inference:
+            for scale in self.scales:
+                scale_key = str(scale)
+                ddim_loss = self._compute_ddim_loss(
+                    scale_key=scale_key,
+                    gt_depth=gt[("disp_diffusion", scale)],
+                    condition_input=condition_inputs[scale_key]
+                )
+                self.outputs[("ddim_loss", scale)] = ddim_loss
+        else:
+            # In inference mode, set ddim_loss to zero for all scales
+            for scale in self.scales:
+                self.outputs[("ddim_loss", scale)] = torch.tensor(0.0, device=condition_inputs[str(scale)].device)
 
         return self.outputs
     
