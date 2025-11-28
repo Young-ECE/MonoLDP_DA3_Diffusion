@@ -4,7 +4,7 @@
 
 使用方法:
     python evaluate_student_nyu_depth.py \
-        --load_weights_folder /path/to/models/weights_19 \
+        --student_model_path /path/to/models/weights_19 \
         --data_path /path/to/nyu_data \
         --eval_split nyu \
         --use_least_squares
@@ -88,19 +88,19 @@ def detect_decoder_type(decoder_path):
         return 'diffusion'
 
 
-def load_opts_from_checkpoint(load_weights_folder):
+def load_opts_from_checkpoint(model_path):
     """
     从模型检查点文件夹加载 opt.json 配置
     
     Args:
-        load_weights_folder: 模型权重文件夹路径（如 weights_19）
+        model_path: 模型权重文件夹路径（如 weights_19）
         
     Returns:
         dict: 加载的配置字典，如果文件不存在则返回 None
     """
     # opt.json 在 models 文件夹下，不在 weights_X 文件夹下
     # 所以需要向上查找
-    weights_dir = os.path.dirname(load_weights_folder)  # 获取 models 目录
+    weights_dir = os.path.dirname(model_path)  # 获取 models 目录
     opt_json_path = os.path.join(weights_dir, "opt.json")
     
     if os.path.exists(opt_json_path):
@@ -139,7 +139,7 @@ def merge_opts(saved_opts, cmd_opts):
         'post_process', 'disable_median_scaling', 
         'pred_depth_scale_factor', 'use_fixed_max_depth',
         'use_least_squares', 'batch_size', 'num_workers',
-        'load_weights_folder', 'models_to_load'
+        'student_model_path', 'load_weights_folder'  # 评估专用参数
     ]
     
     # 从保存的配置中更新，但命令行参数优先
@@ -194,11 +194,21 @@ def compute_errors(gt, pred):
 def evaluate_student(opt):
     """评估学生模型"""
     # 1. 加载保存的配置
-    load_weights_folder = os.path.expanduser(opt.load_weights_folder)
-    assert os.path.isdir(load_weights_folder), \
-        "Cannot find folder at {}".format(load_weights_folder)
+    # 使用 student_model_path（评估专用参数），如果没有则回退到 load_weights_folder（向后兼容）
+    student_model_path = getattr(opt, 'student_model_path', None)
+    if student_model_path is None:
+        # 向后兼容：如果没有 student_model_path，使用 load_weights_folder
+        student_model_path = getattr(opt, 'load_weights_folder', None)
     
-    saved_opts = load_opts_from_checkpoint(load_weights_folder)
+    if student_model_path is None:
+        raise ValueError("--student_model_path is required for evaluation. "
+                        "Please specify the path to trained model weights folder.")
+    
+    student_model_path = os.path.expanduser(student_model_path)
+    assert os.path.isdir(student_model_path), \
+        "Cannot find folder at {}".format(student_model_path)
+    
+    saved_opts = load_opts_from_checkpoint(student_model_path)
     opt = merge_opts(saved_opts, opt)
     
     # 2. 使用配置中的输入分辨率（确保是32的倍数，ResNet的要求）
@@ -229,11 +239,11 @@ def evaluate_student(opt):
     )
     
     # 4. 加载模型权重
-    print("-> Loading model weights from {}".format(load_weights_folder))
-    encoder_path = os.path.join(load_weights_folder, "encoder.pth")
-    decoder_path = os.path.join(load_weights_folder, "depth.pth")
-    scalenet_path = os.path.join(load_weights_folder, "scalenet.pth")
-    regression_path = os.path.join(load_weights_folder, "regression.pth")
+    print("-> Loading model weights from {}".format(student_model_path))
+    encoder_path = os.path.join(student_model_path, "encoder.pth")
+    decoder_path = os.path.join(student_model_path, "depth.pth")
+    scalenet_path = os.path.join(student_model_path, "scalenet.pth")
+    regression_path = os.path.join(student_model_path, "regression.pth")
     
     encoder_dict = torch.load(encoder_path, weights_only=False)
     

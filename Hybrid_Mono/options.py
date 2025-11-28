@@ -459,6 +459,21 @@ class MonodepthOptions:
                                  default=12)
 
         # ====================================================================
+        # MODEL LOADING OPTIONS (模型加载配置 - 用于继续训练)
+        # ====================================================================
+        self.parser.add_argument("--load_weights_folder",
+                                type=str,
+                                help="path to checkpoint folder for resuming training. "
+                                     "Should contain: encoder.pth, depth.pth, scalenet.pth, regression.pth, adam.pth. "
+                                     "For training from scratch, set to None or don't specify.",
+                                default=None)
+        self.parser.add_argument("--models_to_load",
+                                 nargs="+",
+                                 type=str,
+                                 help="models to load when resuming training (encoder, depth, scalenet, regression)",
+                                 default=["encoder", "depth", "scalenet", "regression"])
+
+        # ====================================================================
         # LOGGING & DEBUGGING OPTIONS (日志和调试配置)
         # ====================================================================
         self.parser.add_argument("--log_frequency",
@@ -514,17 +529,11 @@ class MonodepthOptions:
         # STUDENT MODEL EVALUATION OPTIONS (学生模型评估配置)
         # ====================================================================
         # 用于评估训练好的学生模型（ResNet + Diffusion Decoder）
-        self.parser.add_argument("--load_weights_folder",
+        self.parser.add_argument("--student_model_path",
                                 type=str,
-                                help="path to student model weights folder (for evaluation). "
-                                     "Should contain: encoder.pth, depth.pth, scalenet.pth, regression.pth. "
-                                     "For training from scratch, set to None or don't specify.",
-                                default="/oldisk/home/jingyang/monoldp/temp/monoldp_diffusion_model_20251123_234053/models/weights_19") 
-        self.parser.add_argument("--models_to_load",
-                                 nargs="+",
-                                 type=str,
-                                 help="student models to load (for evaluation: encoder, depth, scalenet, regression)",
-                                 default=["encoder", "depth", "scalenet", "regression"])
+                                help="path to trained student model weights folder (required for evaluation). "
+                                     "Should contain: encoder.pth, depth.pth, scalenet.pth, regression.pth.",
+                                default="/oldisk/home/jingyang/monoldp/temp/monoldp_diffusion_model_20251123_234053/models/weights_19")
         self.parser.add_argument("--use_least_squares",
                                 help="use least squares alignment (scale + shift) instead of median scaling for evaluation",
                                 action="store_true",
