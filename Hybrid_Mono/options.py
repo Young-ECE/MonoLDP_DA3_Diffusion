@@ -162,6 +162,10 @@ class MonodepthOptions:
                                 help="enable photometric reprojection loss (default: True)",
                                 action="store_true",
                                 default=True)
+        self.parser.add_argument("--no-use_photometric_loss",
+                                help="disable photometric reprojection loss (overrides --use_photometric_loss)",
+                                action="store_false",
+                                dest="use_photometric_loss")
         self.parser.add_argument("--photometric_weight",
                                 type=float,
                                 default=0.5,
@@ -240,6 +244,10 @@ class MonodepthOptions:
                                 help="enable edge-aware smoothness loss (default: True)",
                                 action="store_true",
                                 default=True)
+        self.parser.add_argument("--no-use_smoothness_loss",
+                                help="disable edge-aware smoothness loss (overrides --use_smoothness_loss)",
+                                action="store_false",
+                                dest="use_smoothness_loss")
         self.parser.add_argument("--smoothness_weight",
                                 type=float,
                                 default=0.02,
@@ -260,6 +268,10 @@ class MonodepthOptions:
                                 help="enable plane regularization loss (default: True)",
                                 action="store_true",
                                 default=True)
+        self.parser.add_argument("--no-use_plane_regularization",
+                                help="disable plane regularization loss (overrides --use_plane_regularization)",
+                                action="store_false",
+                                dest="use_plane_regularization")
         self.parser.add_argument("--num_plane_keysets",
                                 type=int,
                                 default=512,
@@ -279,6 +291,10 @@ class MonodepthOptions:
                                 help="enable line regularization loss (default: True)",
                                 action="store_true",
                                 default=True)
+        self.parser.add_argument("--no-use_line_regularization",
+                                help="disable line regularization loss (overrides --use_line_regularization)",
+                                action="store_false",
+                                dest="use_line_regularization")
         self.parser.add_argument("--num_line_keysets",
                                 type=int,
                                 default=128,
@@ -422,6 +438,10 @@ class MonodepthOptions:
                                 help="enable mask training loss (feature-level masking for robustness) (default: True)",
                                 action="store_true",
                                 default=True)
+        self.parser.add_argument("--no-use_mask_training",
+                                help="disable mask training loss (overrides --use_mask_training)",
+                                action="store_false",
+                                dest="use_mask_training")
         
         self.parser.add_argument("--mask_probability",
                                 type=float,

@@ -692,14 +692,66 @@ class Trainer:
         for scale in self.opt.scales:
             outputs[("predisp", scale)] = pre_outputs[("disp", scale)]
 
-        outputs.update(self.predict_poses_ori(inputs))
-        self.generate_images_pred_ori(inputs, outputs)
+        # 检查是否需要计算photometric loss（pose预测和重投影图像生成）
+        use_photometric_loss = getattr(self.opt, 'use_photometric_loss', True)
+        use_plane_reg = getattr(self.opt, 'use_plane_regularization', True)
+        use_line_reg = getattr(self.opt, 'use_line_regularization', True)
+        need_geometric_data = use_plane_reg or use_line_reg
+        
+        if use_photometric_loss:
+            # 需要计算photometric loss，执行pose预测和重投影图像生成
+            outputs.update(self.predict_poses_ori(inputs))
+            self.generate_images_pred_ori(inputs, outputs)
 
-        outputs.update(self.predict_poses_second(inputs, outputs))
-        self.generate_images_pred_second(inputs, outputs)
+            outputs.update(self.predict_poses_second(inputs, outputs))
+            self.generate_images_pred_second(inputs, outputs)
 
-        outputs.update(self.predict_poses_third(inputs, outputs))
-        self.generate_images_pred_third(inputs, outputs)
+            outputs.update(self.predict_poses_third(inputs, outputs))
+            self.generate_images_pred_third(inputs, outputs)
+        else:
+            # 禁用photometric loss时，跳过pose预测和重投影图像生成以加速训练
+            # 但如果需要plane/line regularization，仍需要生成cam_points和depth_ori
+            if need_geometric_data:
+                # 只生成cam_points和depth_ori，不生成重投影图像
+                # 注意：features已经在前面计算过了，这里直接使用
+                depth_factors = self.models["scalenet"](features)
+                scale_predictions = [head(factor) for head, factor in zip(self.models["regression"], depth_factors)]
+                max_depth = torch.mean(torch.stack(scale_predictions), dim=0)
+
+                for scale in self.opt.scales:
+                    disp = outputs[("disp", scale)]
+                    all_depths = []
+                    for i in range(self.opt.batch_size):
+                        disp_i = disp[i:i+1]  # (1, H, W)
+                        max_depth_i = max_depth[i].item()
+                        _, depth_i = disp_to_depth(disp_i, self.opt.min_depth, max_depth_i)
+                        if not isinstance(depth_i, torch.Tensor):
+                            depth_i = torch.tensor(depth_i)
+                        depth_i = depth_i.view(1, *depth_i.shape[1:])
+                        all_depths.append(depth_i)
+                    
+                    depth = torch.cat(all_depths)
+                    outputs[("depth_ori", 0, scale)] = depth
+                    outputs[("cam_points", 0, scale)] = self.backproject_depth[scale](
+                        depth, inputs[("norm_pix_coords", scale)])
+            
+            # 为compute_losses提供空的占位符，避免KeyError
+            for frame_id in self.opt.frame_ids[1:]:
+                for scale in self.opt.scales:
+                    # 创建与输入图像相同形状的零张量作为占位符
+                    batch_size, channels, height, width = inputs[("color", 0, 0)].shape
+                    outputs[("color_ori", frame_id, scale)] = torch.zeros(
+                        batch_size, channels, height // (2 ** scale), width // (2 ** scale),
+                        device=self.device, dtype=inputs[("color", 0, 0)].dtype
+                    )
+                    outputs[("color", frame_id, scale)] = torch.zeros(
+                        batch_size, channels, height // (2 ** scale), width // (2 ** scale),
+                        device=self.device, dtype=inputs[("color", 0, 0)].dtype
+                    )
+                    outputs[("color_new", frame_id, scale)] = torch.zeros(
+                        batch_size, channels, height // (2 ** scale), width // (2 ** scale),
+                        device=self.device, dtype=inputs[("color", 0, 0)].dtype
+                    )
 
         losses = self.compute_losses(inputs, outputs)
         
@@ -1540,44 +1592,52 @@ class Trainer:
                 losses["smooth_loss/{}".format(scale)] = torch.tensor(0.0).to(self.device)
 
             # Geometric regularization losses
-            point3D = outputs[("cam_points", 0, scale)][:, :3, ...]
-            mean_depth = outputs[("depth_ori", 0, scale)].mean(2, True).mean(3)
-            norm_point3D = point3D/(mean_depth + 1e-7)
-
-            # Plane regularization loss
+            # Note: cam_points and depth_ori are generated in generate_images_pred_ori
+            # If photometric loss is disabled, we need to check if they exist
             use_plane_reg = getattr(self.opt, 'use_plane_regularization', True)
-            
-            if use_plane_reg:
-                plane_keysets = inputs[("plane_keysets", 0, scale)]
-                # Check if keysets are valid (not all -1, which indicates empty/invalid keysets)
-                # Keysets shape: (batch_size, 4, num_keysets)
-                # Check if any keyset in the batch has valid indices (>= 0)
-                if torch.any(plane_keysets >= 0):
-                    plane_loss = get_plane_loss(plane_keysets, norm_point3D)
-                    loss += self.opt.plane_weight * plane_loss
-                    losses["plane_loss/{}".format(scale)] = plane_loss
-                else:
-                    # No valid keysets, skip loss calculation
-                    losses["plane_loss/{}".format(scale)] = torch.tensor(0.0).to(self.device)
-            else:
-                losses["plane_loss/{}".format(scale)] = torch.tensor(0.0).to(self.device)
-
-            # Line regularization loss
             use_line_reg = getattr(self.opt, 'use_line_regularization', True)
             
-            if use_line_reg:
-                line_keysets = inputs[("line_keysets", 0, scale)]
-                # Check if keysets are valid (not all -1, which indicates empty/invalid keysets)
-                # Keysets shape: (batch_size, 3, num_keysets)
-                # Check if any keyset in the batch has valid indices (>= 0)
-                if torch.any(line_keysets >= 0):
-                    line_loss = get_line_loss(line_keysets, norm_point3D)
-                    loss += self.opt.line_weight * line_loss
-                    losses["line_loss/{}".format(scale)] = line_loss
+            # Only compute geometric losses if they are enabled and cam_points exist
+            if (use_plane_reg or use_line_reg) and ("cam_points", 0, scale) in outputs:
+                point3D = outputs[("cam_points", 0, scale)][:, :3, ...]
+                mean_depth = outputs[("depth_ori", 0, scale)].mean(2, True).mean(3)
+                norm_point3D = point3D/(mean_depth + 1e-7)
+
+                # Plane regularization loss
+                if use_plane_reg:
+                    plane_keysets = inputs[("plane_keysets", 0, scale)]
+                    # Check if keysets are valid (not all -1, which indicates empty/invalid keysets)
+                    # Keysets shape: (batch_size, 4, num_keysets)
+                    # Check if any keyset in the batch has valid indices (>= 0)
+                    if torch.any(plane_keysets >= 0):
+                        plane_loss = get_plane_loss(plane_keysets, norm_point3D)
+                        loss += self.opt.plane_weight * plane_loss
+                        losses["plane_loss/{}".format(scale)] = plane_loss
+                    else:
+                        # No valid keysets, skip loss calculation
+                        losses["plane_loss/{}".format(scale)] = torch.tensor(0.0).to(self.device)
                 else:
-                    # No valid keysets, skip loss calculation
+                    losses["plane_loss/{}".format(scale)] = torch.tensor(0.0).to(self.device)
+
+                # Line regularization loss
+                if use_line_reg:
+                    line_keysets = inputs[("line_keysets", 0, scale)]
+                    # Check if keysets are valid (not all -1, which indicates empty/invalid keysets)
+                    # Keysets shape: (batch_size, 3, num_keysets)
+                    # Check if any keyset in the batch has valid indices (>= 0)
+                    if torch.any(line_keysets >= 0):
+                        line_loss = get_line_loss(line_keysets, norm_point3D)
+                        loss += self.opt.line_weight * line_loss
+                        losses["line_loss/{}".format(scale)] = line_loss
+                    else:
+                        # No valid keysets, skip loss calculation
+                        losses["line_loss/{}".format(scale)] = torch.tensor(0.0).to(self.device)
+                else:
                     losses["line_loss/{}".format(scale)] = torch.tensor(0.0).to(self.device)
             else:
+                # If cam_points don't exist (photometric loss disabled) or geometric losses are disabled,
+                # set both losses to zero
+                losses["plane_loss/{}".format(scale)] = torch.tensor(0.0).to(self.device)
                 losses["line_loss/{}".format(scale)] = torch.tensor(0.0).to(self.device)
             
             losses["loss/{}".format(scale)] = loss
@@ -1612,7 +1672,37 @@ class Trainer:
             losses: Loss dictionary to update with metrics
         """
         # 获取预测深度
-        depth_pred = outputs[("depth_ori", 0, 0)]
+        # 如果 depth_ori 不存在（例如在纯蒸馏训练时），从 disp 生成它
+        if ("depth_ori", 0, 0) not in outputs:
+            # 从 disp 生成 depth_ori（用于评估）
+            with torch.no_grad():
+                features = self.models["encoder"](inputs[("color_aug", 0, 0)])
+                depth_factors = self.models["scalenet"](features)
+                scale_predictions = [head(factor) for head, factor in zip(self.models["regression"], depth_factors)]
+                max_depth = torch.mean(torch.stack(scale_predictions), dim=0)  # (B,)
+                
+                disp = outputs[("disp", 0)]
+                all_depths = []
+                for i in range(self.opt.batch_size):
+                    disp_i = disp[i:i+1]  # (1, H, W)
+                    max_depth_i = max_depth[i].item()
+                    _, depth_i = disp_to_depth(disp_i, self.opt.min_depth, max_depth_i)
+                    if not isinstance(depth_i, torch.Tensor):
+                        depth_i = torch.tensor(depth_i)
+                    depth_i = depth_i.view(1, *depth_i.shape[1:])
+                    all_depths.append(depth_i)
+                
+                depth_pred = torch.cat(all_depths)
+        else:
+            depth_pred = outputs[("depth_ori", 0, 0)]
+            # 获取每张图像的 global_depth（与评估脚本一致）
+            # 重新计算 features 和 global_depth（因为 outputs 中可能没有保存）
+            with torch.no_grad():
+                features = self.models["encoder"](inputs[("color_aug", 0, 0)])
+                depth_factors = self.models["scalenet"](features)
+                scale_predictions = [head(factor) for head, factor in zip(self.models["regression"], depth_factors)]
+                max_depth = torch.mean(torch.stack(scale_predictions), dim=0)  # (B,)
+        
         depth_pred = torch.clamp(F.interpolate(
             depth_pred, [self.dataset.full_res_shape[1], self.dataset.full_res_shape[0]],
             mode="bilinear", align_corners=False), self.dataset.min_depth, self.dataset.max_depth)
@@ -1620,14 +1710,6 @@ class Trainer:
 
         depth_gt = inputs["depth_gt"]
         B = depth_gt.shape[0]
-        
-        # 获取每张图像的 global_depth（与评估脚本一致）
-        # 重新计算 features 和 global_depth（因为 outputs 中可能没有保存）
-        with torch.no_grad():
-            features = self.models["encoder"](inputs[("color_aug", 0, 0)])
-            depth_factors = self.models["scalenet"](features)
-            scale_predictions = [head(factor) for head, factor in zip(self.models["regression"], depth_factors)]
-            max_depth = torch.mean(torch.stack(scale_predictions), dim=0)  # (B,)
 
         # 使用与评估脚本相同的 MIN_DEPTH
         MIN_DEPTH = 1e-3

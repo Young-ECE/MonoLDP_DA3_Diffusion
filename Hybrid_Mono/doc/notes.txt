@@ -1,6 +1,8 @@
-### 模型路径
-- 模型权重保存路径: /oldisk/home/jingyang/monoldp/temp/monoldp_diffusion_model_20251123_234053/models/weights_19
-
+### 训练好的学生模型路径
+- 学生模型权重保存路径: /oldisk/home/jingyang/monoldp/temp/monoldp_diffusion_model_20251123_234053/models/weights_19
 
 ## DA3模型路径
 /home/jingyang/.cache/huggingface/hub/models--depth-anything--DA3MONO-LARGE/snapshots/f465978e618db8cc79c83b8bbf24964857db1875
+
+##数据集路径
+/oldisk/home/jingyang/monoldp/datasets/nyu_data/
